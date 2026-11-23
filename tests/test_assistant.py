@@ -172,10 +172,25 @@ def test_tasks_by_voice(friday):
     ("open battlefield", "Opening Battlefield V."),
     ("open youtube", "Opening youtube."),
     ("open github dot com", "Opening github dot com."),
-    ("open xyzzy", "I couldn't find an app called xyzzy."),
+    ("open xyzzy", "I couldn't find an app called xyzzy. Which app should I open?"),
 ])
 def test_open(friday, said, reply):
     assert friday.handle(said).text == reply
+
+
+def test_misheard_app_asks_and_takes_the_answer(friday):
+    assert friday.handle("Friday, open, 45.").text == "I couldn't find an app called 45. Which app should I open?"
+    assert friday.handle("Spotify").text == "Opening Spotify."
+
+
+def test_login_command(friday):
+    assert friday.handle("/login").text.startswith("I've opened a window to sign in to Claude")
+
+
+def test_hotwords_prefer_short_names():
+    from friday.listen import build_hotwords
+    hw = build_hotwords(["Spotify", "Battlefield™ V", "Visual Studio Code", "A Very Long Application Name Here", "spotify"])
+    assert hw == "Spotify, Battlefield V, Visual Studio Code"
 
 
 def test_open_suggests_close_match_and_confirms(friday):

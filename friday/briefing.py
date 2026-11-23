@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -153,6 +154,19 @@ Structure, about {words} words in total:
 """
 
 
+_PUBLISHER = re.compile(r"\s+[-|–]\s+[^-|–]{2,40}$")
+
+
+def _spoken_headline(title: str) -> str:
+    """Drops the ' - Publisher' tail and trailing punctuation so a headline reads naturally."""
+    return _PUBLISHER.sub("", title).strip().rstrip(".")
+
+
+def _spoken_move(q) -> str:
+    direction = "up" if q.change_pct >= 0 else "down"
+    return f"{q.name} {direction} {abs(q.change_pct):.1f} percent"
+
+
 def template_briefing(cfg, data: BriefingData, now: datetime | None = None) -> str:
     """No-AI fallback: a plain read-out of the data."""
     now = now or datetime.now()
@@ -161,18 +175,18 @@ def template_briefing(cfg, data: BriefingData, now: datetime | None = None) -> s
 
     movers = biggest_movers(data.quotes)
     if movers:
-        parts.append("Biggest market moves: " + "; ".join(format_quote(q) for q in movers) + ".")
+        parts.append("The biggest market moves: " + ", ".join(_spoken_move(q) for q in movers) + ".")
     top = select_top(data.headlines, 5, per_source=2)
     if data.signal_events:
         parts.append("Top market-moving events.")
         for e in data.signal_events[:5]:
-            line = f"{e['title'].rstrip('.')}."
+            line = f"{_spoken_headline(e['title'])}."
             if e.get("impacts"):
                 line += " Could mean " + ", ".join(i.split(" (")[0] for i in e["impacts"][:3]) + "."
             parts.append(line)
     elif top:
-        parts.append("Top market-moving headlines.")
-        parts.extend(f"From {h.source}: {h.title.rstrip('.')}." for h in top)
+        parts.append("Here are the top market-moving headlines.")
+        parts.extend(f"{_spoken_headline(h.title)}." for h in top)
     if data.agenda:
         parts.append("On your calendar today: " + "; ".join(a.split(": ", 1)[-1] for a in data.agenda) + ".")
     if data.tasks:

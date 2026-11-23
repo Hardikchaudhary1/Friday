@@ -99,5 +99,6 @@ def test_prompt_contains_all_sections():
 def test_template_briefing_without_ai():
     text = template_briefing(CFG, _data(), now=datetime(2026, 11, 23, 19, 0))
     assert text.startswith("Good evening, Tester.")
-    assert "Brent crude" in text
+    assert "Brent crude down 3.4 percent" in text
+    assert "From " not in text
     assert "task list is clear" in text

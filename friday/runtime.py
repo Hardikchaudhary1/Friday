@@ -56,6 +56,7 @@ class Runtime:
             finally:
                 time.sleep(0.3)  # let the speaker echo die down before listening again
                 self.speaking.clear()
+                self.say_queue.task_done()
 
     def interrupt(self):
         """Stops current speech and anything queued."""
@@ -63,6 +64,7 @@ class Runtime:
         while not self.say_queue.empty():
             try:
                 self.say_queue.get_nowait()
+                self.say_queue.task_done()
             except queue.Empty:
                 break
 
@@ -82,7 +84,15 @@ class Runtime:
             threading.Thread(target=self.run_briefing, daemon=True).start()
         else:
             self.say(reply.text)
+            # Friday asked something ("When should I remind you?"): listen for the answer
+            # without needing the wake word again.
+            if source == "voice" and self.listener and self.assistant.pending:
+                threading.Thread(target=self._follow_up, daemon=True).start()
         return reply
+
+    def _follow_up(self):
+        self.say_queue.join()          # returns once everything queued has been spoken
+        self.listener.trigger.set()
 
     def run_briefing(self, mark: bool = True):
         from .briefing import gather, mark_briefed, save_briefing, write_briefing
@@ -162,8 +172,17 @@ class Runtime:
             if beep:
                 beep()
 
+        def vocabulary():
+            from .apps import WEBSITES
+            try:
+                apps = [a.name for a in self.assistant.apps.apps()]
+            except Exception:
+                apps = []
+            return list(self.assistant.apps.aliases) + list(WEBSITES) + apps
+
         self.listener = Listener(self.cfg, on_command=lambda t: self.handle(t), is_speaking=self.speaking.is_set,
-                                 on_wake=on_wake, log=lambda m: console.print(f"[dim]{m}[/dim]"))
+                                 on_wake=on_wake, log=lambda m: console.print(f"[dim]{m}[/dim]"),
+                                 vocabulary=vocabulary)
         self.listener.start()
 
         def hotkey_pressed():

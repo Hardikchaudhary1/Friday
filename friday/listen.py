@@ -28,6 +28,23 @@ DECOY_WORDS = ["monday", "today", "fried", "free", "right", "five", "the", "what
 _WAKE_IN_TEXT = re.compile(r"^\W*(\w+\W+){0,3}?fri\s?day\b", re.I)
 
 
+def build_hotwords(names: list[str], max_chars: int = 600) -> str:
+    """A comma-separated list of names for Whisper to favour, shortest (most commonly said) first,
+    capped so it fits in Whisper's prompt."""
+    unique: dict[str, str] = {}
+    for n in names:
+        name = re.sub(r"[™®©]", "", n or "").strip()
+        if name and len(name.split()) <= 3:
+            unique.setdefault(name.lower(), name)      # keep the first spelling given
+    picked, total = [], 0
+    for name in sorted(unique.values(), key=lambda n: (len(n.split()), len(n))):
+        if total + len(name) + 2 > max_chars:
+            break
+        picked.append(name)
+        total += len(name) + 2
+    return ", ".join(picked)
+
+
 def wake_word_confirmed(transcript: str) -> bool:
     """Whisper's transcript must contain the wake word near its start."""
     return bool(_WAKE_IN_TEXT.search(transcript))
@@ -91,9 +108,11 @@ class Hotkey(threading.Thread):
 class Listener(threading.Thread):
     """Waits for "Friday" (or the hotkey), records what follows, and hands the text to on_command."""
 
-    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print):
+    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print, vocabulary=None):
         super().__init__(daemon=True, name="friday-listener")
         self.cfg, self.on_command, self.is_speaking, self.on_wake, self.log = cfg, on_command, is_speaking, on_wake, log
+        # Names Whisper should expect (installed apps, websites), so "open Spotify" isn't heard as "open 45".
+        self.hotwords = build_hotwords(vocabulary() if vocabulary else [])
         self.audio: queue.Queue[bytes] = queue.Queue()
         self.trigger = threading.Event()
         self.stop = threading.Event()
@@ -136,6 +155,9 @@ class Listener(threading.Thread):
             while not self.stop.is_set():
                 if self.trigger.is_set():
                     self.trigger.clear()
+                    while self.is_speaking():          # a follow-up waits until Friday finishes talking
+                        time.sleep(0.1)
+                    self._drain()
                     self._take_command(include_ring=False)
                     rec.Reset()
                     continue
@@ -169,7 +191,6 @@ class Listener(threading.Thread):
     def _take_command(self, include_ring: bool):
         if self.on_wake:
             self.on_wake()
-        self._drain() if not include_ring else None
         audio = self._record(list(self.ring) if include_ring else [])
         self.ring.clear()
         if audio is None:
@@ -212,5 +233,6 @@ class Listener(threading.Thread):
 
     def _transcribe(self, audio: np.ndarray) -> str:
         segments, _ = self.whisper.transcribe(audio, language="en", beam_size=5, initial_prompt=WHISPER_HINT,
+                                              hotwords=self.hotwords or None,
                                               condition_on_previous_text=False, vad_filter=False)
         return " ".join(s.text.strip() for s in segments).strip()

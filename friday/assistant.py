@@ -50,6 +50,7 @@ R_THANKS = _rx(r"^(thanks|thank you|cheers)\b")
 R_TIME = _rx(r"\bwhat('s| is)? ?(the )?time\b|\btime is it\b")
 R_DATE = _rx(r"\bwhat('s| is) (the |today's )?date\b|\bwhat day is (it|today)\b")
 R_HELP = _rx(r"^(help|what can you do|what do you do)\b")
+R_LOGIN = _rx(r"^/?(login|log in|sign in|signin)( to claude)?$")
 R_OPEN = _rx(r"^(please )?(open|launch|start|run|fire up)\s+(.+)$")
 R_SEARCH = _rx(r"^(please )?(search|google|look up)( the web| online)?( for)?\s+(.+)$")
 R_REMIND = _rx(r"^(please )?(remind me|set (a |an )?(reminder|alarm)|create (a )?reminder)\s*(to|about|that|for|of)?\s*(.*)$")
@@ -109,6 +110,7 @@ class Assistant:
             (R_GREET, lambda m: Reply(f"Hello {self.cfg.get('user_name', '')}. How can I help?".replace("  ", " "))),
             (R_THANKS, lambda m: Reply("You're welcome.")),
             (R_HELP, lambda m: Reply(HELP)),
+            (R_LOGIN, lambda m: self._login()),
             (R_CANCEL_REMINDER, self._cancel_reminder),
             (R_CANCEL_EVENT, self._cancel_event),
             (R_REMIND, self._remind),
@@ -150,6 +152,8 @@ class Assistant:
             return self._remind_text(text)
         if pending["kind"] == "event_date":
             return self._event_text(f"{pending['title']} {text}")
+        if pending["kind"] == "open_name":
+            return self._open(re.sub(r"^(open|launch|start)\s+", "", text, flags=re.I))
         if pending["kind"] == "open_confirm" and re.match(r"^(yes|yeah|yep|sure|ok|okay|please|do it)\b", text, re.I):
             return self._open(pending["name"])
         return self.handle(text)
@@ -160,7 +164,22 @@ class Assistant:
         result = open_target(name, self.apps, dry_run=self.dry_run)
         if not result.ok and result.target:
             return self._ask("open_confirm", result.message, name=result.target)
+        if not result.ok:
+            return self._ask("open_name", f"{result.message.rstrip('.')}. Which app should I open?")
         return Reply(result.message, data={"target": result.target})
+
+    def _login(self) -> Reply:
+        """Opens a PowerShell window that runs the Claude CLI sign-in (browser based)."""
+        from .llm import find_claude_cli
+        cli = find_claude_cli(self.cfg.get("llm.claude_cli_path", ""))
+        if not cli:
+            return Reply("I couldn't find the Claude CLI on this computer.")
+        if not self.dry_run:
+            import subprocess
+            subprocess.Popen(["powershell", "-NoExit", "-Command", f"& '{cli}' auth login"],
+                             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        return Reply("I've opened a window to sign in to Claude. Finish the sign-in in your browser, "
+                     "then I can answer questions and write your briefings.")
 
     # ---- reminders -----------------------------------------------------------
 

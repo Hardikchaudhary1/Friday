@@ -182,6 +182,11 @@ class Runtime:
         threading.Thread(target=self._reminder_loop, daemon=True, name="friday-reminders").start()
         threading.Thread(target=self._prewarm_voice, daemon=True, name="friday-prewarm").start()
         threading.Thread(target=self._refresh_loop, daemon=True, name="friday-briefing-refresh").start()
+        # Start Signal (market events + dashboard) in the background if it isn't already running.
+        if self.cfg.get("signal.enabled", True) and self.cfg.get("signal.autostart", True):
+            from . import signal_link
+            threading.Thread(target=signal_link.start, args=(self.cfg, lambda m: console.print(f"[dim]{m}[/dim]")),
+                             daemon=True, name="friday-signal-start").start()
 
         if self.use_voice_input:
             self._start_voice_input()

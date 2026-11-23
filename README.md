@@ -36,6 +36,10 @@ notifications and are spoken aloud when they are due.
 | "What are my reminders?" / "Cancel the reminder about the bank" | Lists or cancels reminders |
 | "Add task pay rent due Friday" / "What are my tasks?" / "Mark pay rent as done" | To-do list |
 | "Brief me" | Full spoken markets and geopolitics briefing |
+| "Open the dashboard" | Opens the Signal market dashboard (Friday starts Signal for you) |
+| "What's moving the markets?" / "Market risk" | Signal's top events and which assets are under pressure |
+| "What's the weather?" / "Weather in London tomorrow" | Live weather; Friday remembers your city |
+| "Move the dentist to Friday at 3 PM" / "Delete the readme project" | Edit or remove events, reminders and tasks by name |
 | "What time is it?" / "Stop" / anything else | Answers; general questions go to Claude |
 
 Wake it by saying **"Friday"** or pressing **Ctrl+Alt+F**. You can also type commands in Friday's window.

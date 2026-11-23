@@ -345,6 +345,43 @@ def test_loose_next_previous(friday, heard, key):
     assert friday.handle(heard).data == {"media": key}
 
 
+class FakeSignal:
+    def __init__(self, up=True):
+        self.up = up
+
+    def is_running(self, cfg):
+        return self.up
+
+    def start(self, cfg, log=None):
+        return False
+
+    def base_url(self, cfg):
+        return "http://127.0.0.1:8765"
+
+    def top_events(self, cfg, limit):
+        return [{"title": "OPEC agrees surprise output cut", "impacts": ["Brent crude up (confidence 0.7)",
+                                                                       "Airline stocks down (confidence 0.5)"]},
+                {"title": "Fed signals another hike", "impacts": []}][:limit]
+
+    def risk(self, cfg):
+        return {"assets": [{"label": "Brent crude", "pressure": 3.2}, {"label": "Nasdaq", "pressure": -1.1}],
+                "regions": [{"region": "Middle East"}, {"region": "United States"}]}
+
+
+def test_signal_commands(friday):
+    friday.signal_api = FakeSignal()
+    assert friday.handle("Friday, open the dashboard").text == "Opening your market dashboard."
+    assert friday.handle("what's moving the markets").text == (
+        "The top market events: OPEC agrees surprise output cut. It could push Brent crude up, Airline stocks down."
+        " Next, Fed signals another hike.")
+    assert friday.handle("market risk").text == (
+        "Most pressure in the last day: Brent crude upward, Nasdaq downward. "
+        "The busiest regions are Middle East and United States.")
+    assert friday.handle("market update").action == "briefing"   # still the full briefing
+    friday.signal_api = FakeSignal(up=False)
+    assert "isn't running" in friday.handle("top market events").text
+
+
 def test_greeting_when_online(tmp_path):
     from friday.runtime import Runtime
     rt = Runtime(Config({"user_name": "Boss", "data_dir": str(tmp_path)}), use_voice_input=False)

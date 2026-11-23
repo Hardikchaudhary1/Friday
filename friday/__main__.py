@@ -178,6 +178,14 @@ def cmd_doctor(args, cfg) -> int:
         except Exception as exc:
             console.print(f"  {b.name}: [red]failed[/red] {exc}")
     console.print(f"Voice engine: {cfg.get('voice.engine')} / {cfg.get('voice.edge_voice')}")
+    from . import signal_link
+    if signal_link.is_running(cfg):
+        st = signal_link.status(cfg)
+        console.print(f"Signal: [green]running[/green] at {signal_link.base_url(cfg)} "
+                      f"({st.get('stories')} events from {st.get('articles')} articles)")
+    else:
+        console.print(f"Signal: [yellow]not running[/yellow] (Friday starts it automatically; "
+                      f"project at {signal_link.project_dir(cfg)})")
     from .listen import voice_input_ready
     ok, reason = voice_input_ready(cfg)
     console.print(f"Voice input: {'[green]' if ok else '[yellow]'}{reason}")

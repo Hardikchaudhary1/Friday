@@ -119,6 +119,12 @@ R_WEATHER = _rx(r"\b(weather|forecast|temperature outside|is it (going to )?rain
 R_WEATHER_CITY = _rx(r"\b(?:in|for|at)\s+([a-z][a-z .'-]+?)(?:\s+(?:today|tomorrow|now|right now|this week))?$")
 R_SET_CITY = _rx(r"^(my city is|i live in|i'm in|i am in|set my (city|location) to|my location is|"
                  r"use) (.+?)( for (the )?weather)?$")
+R_DASHBOARD = _rx(r"^(open|show|show me|launch|bring up|pull up)( me)?( the| my)? (market |signal |markets )?"
+                  r"dashboard$")
+R_MARKET_EVENTS = _rx(r"\b(what'?s|what is|what are) (moving|driving) (the )?markets?\b|\b(top|biggest|main) market "
+                      r"(events|news|stories|movers)\b|\bmarket events\b")
+R_MARKET_RISK = _rx(r"\b(market risk|risk (view|summary|overview)|which assets are under pressure|"
+                    r"where('?s| is) the (risk|pressure))\b")
 R_CLOSE = _rx(r"^(close|quit|exit|shut down|kill)\s+(.+)$")
 R_FOCUS = _rx(r"^(switch to|go to|focus( on)?|bring up|go back to)\s+(.+)$")
 R_BRIEF = _rx(r"\b(brief me|briefing|market (update|news|summary)|what('s| is) (happening|going on)|the news|headlines)\b")
@@ -149,6 +155,7 @@ class Assistant:
         self.pending: dict | None = None   # a follow-up question waiting for an answer
         self.on_thinking = None            # called before a slow Claude answer
         self.last_search: tuple[str, str] | None = None   # for "play that song"
+        self.signal_api = None       # tests replace the Signal connection
         self.weather_lookup = None   # tests replace the live geocoder and forecast
         self.weather_report = None
         self.window_lister = None          # tests replace the live window list
@@ -197,6 +204,9 @@ class Assistant:
             (R_REMINDERS, lambda m: self._list_reminders()),
             (R_EVENT, self._event),   # before R_SCHEDULE: "put X in my calendar" adds, it doesn't ask
             (R_SCHEDULE, lambda m: self._schedule(text)),
+            (R_DASHBOARD, lambda m: self._dashboard()),
+            (R_MARKET_EVENTS, lambda m: self._market_events()),
+            (R_MARKET_RISK, lambda m: self._market_risk()),
             (R_CLOSE, lambda m: self._close(m.group(2))),
             (R_FOCUS, lambda m: self._focus(m.group(3))),
             (R_OPEN, lambda m: self._open(m.group(3))),
@@ -330,6 +340,63 @@ class Assistant:
             import threading
             threading.Timer(6.0, media.press, args=("play_pause",)).start()
         return Reply("Opening Spotify and starting your music.")
+
+    # ---- Signal: dashboard, market events, risk ----------------------------------
+
+    def _signal(self):
+        from . import signal_link
+        return self.signal_api or signal_link
+
+    def _signal_up(self) -> bool:
+        link = self._signal()
+        if link.is_running(self.cfg):
+            return True
+        if self.dry_run:
+            return False
+        return link.start(self.cfg)
+
+    def _dashboard(self) -> Reply:
+        import webbrowser
+        if not self._signal_up():
+            return Reply("I couldn't start the market dashboard. Check that the Signal project is installed.")
+        if not self.dry_run:
+            webbrowser.open(self._signal().base_url(self.cfg) + "/")
+        return Reply("Opening your market dashboard.")
+
+    def _market_events(self) -> Reply:
+        if not self._signal_up():
+            return Reply("The market events service isn't running. Say brief me for the full briefing instead.")
+        try:
+            events = self._signal().top_events(self.cfg, 3)
+        except (OSError, ValueError):
+            return Reply("I couldn't read the market events just now.")
+        if not events:
+            return Reply("Nothing market-moving has come up yet. Signal is still gathering news.")
+        parts = []
+        for e in events:
+            line = e["title"]
+            for _ in range(2):   # drop " - Publisher" / " | Site" / " – business live" tails
+                line = re.sub(r"\s+[-|–]\s+[^-|–]{2,60}$", "", line)
+            line = line.rstrip(".")
+            if e.get("impacts"):
+                line += ". It could push " + ", ".join(i.split(" (")[0] for i in e["impacts"][:2])
+            parts.append(line + ".")
+        return Reply("The top market events: " + " Next, ".join(parts))
+
+    def _market_risk(self) -> Reply:
+        if not self._signal_up():
+            return Reply("The market events service isn't running right now.")
+        try:
+            r = self._signal().risk(self.cfg)
+        except (OSError, ValueError):
+            return Reply("I couldn't read the risk view just now.")
+        assets = r.get("assets", [])[:4]
+        if not assets:
+            return Reply("No clear pressure on any asset in the last day.")
+        parts = [f"{a['label']} {'upward' if a['pressure'] > 0 else 'downward'}" for a in assets]
+        regions = [x["region"] for x in r.get("regions", [])[:2]]
+        tail = f" The busiest regions are {' and '.join(regions)}." if regions else ""
+        return Reply("Most pressure in the last day: " + ", ".join(parts) + "." + tail)
 
     # ---- weather and browsers ----------------------------------------------------
 

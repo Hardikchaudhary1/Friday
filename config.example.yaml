@@ -48,6 +48,11 @@ apps:
 signal:
   enabled: true
   url: "http://127.0.0.1:8765"
+  autostart: true            # Friday starts Signal in the background if it isn't running
+  project_dir: ""            # empty = the "signal" folder next to this project
+  refresh_minutes: 30        # how often Signal re-reads the news when Friday starts it
+  llm_max_stories: 3         # stories per refresh that Claude classifies (uses your Claude plan)
+  claude_model: "haiku"
 
 briefing:
   max_headlines_for_llm: 30

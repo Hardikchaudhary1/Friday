@@ -38,6 +38,7 @@ class BriefingData:
     tasks: list[Task]
     feed_errors: list[str] = field(default_factory=list)
     signal_events: list[dict] = field(default_factory=list)
+    agenda: list[str] = field(default_factory=list)   # today's events and reminders, spoken form
 
 
 @dataclass
@@ -71,7 +72,18 @@ def gather(cfg) -> BriefingData:
         events, signal_err = signal_f.result()
     if signal_err:
         errors.append(signal_err)
-    return BriefingData(date.today(), headlines, quotes, store.for_today(), errors, events)
+    return BriefingData(date.today(), headlines, quotes, store.for_today(), errors, events, todays_agenda(cfg))
+
+
+def todays_agenda(cfg) -> list[str]:
+    from .schedule import ScheduleStore
+    sched = ScheduleStore(cfg.data_dir / "friday.db")
+    today = date.today()
+    items = [f"Event: {e.spoken(today)}" for e in sched.events_between(today, today)]
+    end_of_day = datetime.combine(today, datetime.max.time())
+    items += [f"Reminder at {r.due_at:%H:%M}: {r.text}" for r in sched.pending_reminders(end_of_day)
+              if r.event_id is None]
+    return items
 
 
 def _part_of_day(now: datetime) -> str:
@@ -112,6 +124,7 @@ def build_prompt(cfg, data: BriefingData, now: datetime | None = None) -> str:
         f"- {t.text}" + (f" (due {t.due_label(data.today)})" if t.due else "")
         for t in data.tasks
     ) or "- (no open tasks)"
+    agenda_lines = "\n".join(f"- {a}" for a in data.agenda) or "- (nothing scheduled)"
 
     return f"""Write my {_part_of_day(now)} briefing.
 
@@ -127,11 +140,15 @@ NEWS HEADLINES (ranked by a keyword score for likely market impact; higher first
 MY TASKS FOR TODAY (overdue, due today, or undated)
 {task_lines}
 
+MY CALENDAR AND REMINDERS TODAY
+{agenda_lines}
+
 Structure, about {words} words in total:
 1. A one-line greeting with the day.
 2. Markets in two to four sentences: the overall mood, then the biggest moves worth knowing.
 3. The three to five themes from the news most likely to move global markets today, each with why it matters.
-4. My tasks: say how many, call out anything overdue, and suggest an order if it is obvious.
+4. My day: today's events and reminders with their times, then my tasks (how many, anything overdue,
+   and a sensible order if it is obvious).
 5. One short closing line.
 """
 
@@ -156,6 +173,8 @@ def template_briefing(cfg, data: BriefingData, now: datetime | None = None) -> s
     elif top:
         parts.append("Top market-moving headlines.")
         parts.extend(f"From {h.source}: {h.title.rstrip('.')}." for h in top)
+    if data.agenda:
+        parts.append("On your calendar today: " + "; ".join(a.split(": ", 1)[-1] for a in data.agenda) + ".")
     if data.tasks:
         parts.append(f"You have {len(data.tasks)} task{'s' if len(data.tasks) != 1 else ''} on your list.")
         parts.extend(

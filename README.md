@@ -1,81 +1,96 @@
 # Friday
 
-A personal voice assistant for Windows. When you log in, Friday pulls global market data and
-geopolitical and macro news, works out what is most likely to move markets, combines it with your
-to-do list, and **reads you a spoken briefing**.
+A voice-controlled personal assistant for Windows. It starts when you log in, reads you a briefing on
+global markets, geopolitics and your day, and then keeps running: say **"Friday, ..."** to open apps,
+set reminders, add calendar events, manage tasks or ask questions. Reminders pop up as Windows
+notifications and are spoken aloud when they are due.
 
 ```
-login ─► wait for network ─► ┌ 9 RSS feeds ──► dedupe ─► rank by market impact ┐
-                             ├ 17 global markets (equities, rates, FX, oil, gold, BTC) ├─► Claude ─► voice
-                             └ SQLite to-do list (overdue / today) ─────────────────┘      │
-                                                                                 saved as Markdown
+ "Friday, remind me to call mom tomorrow at 5"            login
+        │                                                   │
+  mic ─► Vosk wake word ─► Whisper speech-to-text           ├─► briefing: Signal events + 17 markets
+        (offline, low CPU)   (offline)                      │             + calendar + tasks ─► Claude ─► voice
+        │                                                   │
+        ▼                                                   ▼
+  command parser ──► apps / websites / search        reminder loop (every 15 s)
+   (instant, offline)  reminders / events / tasks  ──►  Windows notification + spoken alert
+        │
+        └─► anything else ─► Claude (short spoken answer)
 ```
 
-## Features (v0.1)
+## What you can say
 
-- **Global market snapshot**: S&P 500, Nasdaq, Euro Stoxx, FTSE, Nikkei, Hang Seng, Shanghai, Nifty,
-  VIX, US 10Y, dollar index, EUR/USD, USD/JPY, Brent, gold, copper, Bitcoin (Yahoo Finance).
-- **News ranked by market impact**: fetches 9 feeds in parallel, merges the same story across outlets
-  (coverage by several outlets raises its score), scores headlines by geopolitical and macro keywords
-  and freshness, and limits how many come from any one source.
-- **AI-written briefing**: Claude turns the data into a short spoken script that says *why* each story
-  matters for markets. It is told to use only the supplied facts and to give no investment advice.
-- **Three AI backends with automatic fallback**: Claude Code CLI (billed to a Claude subscription),
-  Anthropic API, or a plain no-AI read-out, so a briefing always plays.
-- **Natural voice**: Microsoft Edge neural voices, with the offline Windows voice as fallback. Plays
-  through the Windows MCI API, so no audio packages are needed.
-- **To-do list**: `friday task add "Pay rent" --due fri`; overdue and due-today tasks are part of the briefing.
-- **Runs at login, once per day**: a Startup-folder shortcut. No admin rights needed.
+| Say | Friday does |
+|---|---|
+| "Friday, open Spotify" / "open VS Code" / "open YouTube" / "open github dot com" | Opens Start-menu apps (fuzzy matched) or websites |
+| "Search for Brent crude price" | Web search in your browser |
+| "Remind me to call mom tomorrow at 5 PM" / "...in 20 minutes" / "...on Friday" | Reminder; asks "when?" if you leave the time out |
+| "Add dentist appointment on 5th December at 4 PM" / "Put mom's birthday on 12 January in my calendar" | Calendar event, reminded that morning and 30 minutes before |
+| "What's on my schedule tomorrow?" / "What do I have this week?" | Reads your events |
+| "What are my reminders?" / "Cancel the reminder about the bank" | Lists or cancels reminders |
+| "Add task pay rent due Friday" / "What are my tasks?" / "Mark pay rent as done" | To-do list |
+| "Brief me" | Full spoken markets and geopolitics briefing |
+| "What time is it?" / "Stop" / anything else | Answers; general questions go to Claude |
+
+Wake it by saying **"Friday"** or pressing **Ctrl+Alt+F**. You can also type commands in Friday's window.
+
+## Features
+
+- **Offline voice pipeline**: Vosk listens only for the wake word (cheap enough to run all day); Whisper
+  (faster-whisper, int8 on CPU) transcribes the command. The last 2 s of audio are kept, so
+  "Friday, open Spotify" works in one breath. Friday stops listening while it speaks so it doesn't hear itself.
+- **Natural dates**: "tomorrow at 5", "next Wednesday at 3 PM", "in 2 hours", "on the 28th at 11:30"
+  (dateparser plus fixes for bare hours and false matches like "email to May").
+- **Reminders that survive restarts**: stored in SQLite; anything missed while the laptop was off is
+  announced at the next start as "Reminder from ...".
+- **Safe app launching**: only apps in your Start menu and http(s) websites can be opened, never arbitrary commands.
+- **Market briefing**: 9 RSS feeds ranked by market impact, 17 global markets, events from the companion
+  **Signal** engine, and today's calendar, written by Claude and read aloud (Edge neural voice).
+- **Claude without an API key**: uses the Claude Code CLI (billed to a Claude subscription), the Anthropic API,
+  or a no-AI fallback, so it always works.
 
 ## Setup
 
 ```powershell
-cd friday
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
-copy config.example.yaml config.yaml      # then set user_name, voice, markets, feeds
+.\.venv\Scripts\python -m pip install -e ".[dev,voice]"
+copy config.example.yaml config.yaml                 # set user_name, voice, aliases, markets
+.\.venv\Scripts\python -m friday setup-voice         # downloads offline speech models (~190 MB)
+.\.venv\Scripts\python -m friday doctor              # checks Claude, voice, microphone
+.\.venv\Scripts\python -m friday run                 # start the assistant
+powershell -ExecutionPolicy Bypass -File scripts\install_startup.ps1   # start at every login
 ```
 
-Choose how the briefing gets written (at least one is recommended; without one you get the plain read-out):
+To let Friday answer general questions and write the AI briefing, sign in to the Claude Code CLI once
+(`claude` then `/login`) or set `ANTHROPIC_API_KEY`.
 
-- **Claude subscription (Pro/Max)**: sign in to the Claude Code CLI once with `claude` then `/login`.
-  If `claude` is not on your PATH, set `llm.claude_cli_path` in `config.yaml`.
-- **Anthropic API**: set the `ANTHROPIC_API_KEY` environment variable (billed per use, separate from the subscription).
-
-```powershell
-.\.venv\Scripts\python -m friday doctor          # checks which backends work
-.\.venv\Scripts\python -m friday brief           # full spoken briefing
-.\.venv\Scripts\python -m friday brief --no-speak
-.\.venv\Scripts\python -m friday task add "Call bank" --due tomorrow
-.\.venv\Scripts\python -m friday task list
-.\.venv\Scripts\python -m friday task done 1
-powershell -ExecutionPolicy Bypass -File scripts\install_startup.ps1   # brief me at every login
-```
-
-Briefings are archived in `data/briefings/YYYY-MM-DD.md` with links to their sources.
+Other commands: `friday ask "remind me to stretch in 10 minutes"`, `friday brief`, `friday task list`, `friday say "hello"`.
 
 ## Tests
 
 ```powershell
 .\.venv\Scripts\python -m pytest
 ```
+The tests cover date parsing, reminders, events, tasks, app matching and the briefing, using a temporary
+database and a fake clock. No microphone or network is needed.
 
 ## Roadmap
 
-- [ ] v0.2: wake word ("Hey Friday") + local speech-to-text (faster-whisper) for follow-up questions
-- [ ] v0.2: Google Calendar / Outlook events in the briefing
-- [ ] v0.3: tray app with a floating briefing card
-- [ ] v0.3: use the **Signal** service (companion project) for event extraction and impact scoring instead of keywords
-- [ ] Memory of your preferences and the assets you hold
+- [ ] Google Calendar / Outlook sync (events are local for now)
+- [ ] Tray icon and a floating card for the briefing
+- [ ] Close apps, control volume and media by voice
+- [ ] Remember preferences and the assets you follow
 
 ## Project layout
 
 | File | Purpose |
 |---|---|
-| `friday/news.py` | RSS fetching, de-duplication, market-impact scoring |
-| `friday/markets.py` | Global quotes via yfinance |
-| `friday/tasks.py` | SQLite to-do list and due-date parsing |
-| `friday/llm.py` | Claude CLI / Anthropic API backends |
-| `friday/briefing.py` | Prompt, fallback template, archive, once-per-day state |
-| `friday/voice.py` | Edge neural TTS, Windows MCI playback, SAPI fallback |
-| `friday/__main__.py` | Command line |
+| `friday/runtime.py` | Always-on loop: speaker, listener, reminder checker, typed commands |
+| `friday/listen.py` | Microphone, Vosk wake word, Whisper transcription, Ctrl+Alt+F hotkey |
+| `friday/assistant.py` | Command parser and handlers; Claude fallback |
+| `friday/timeparse.py` | Natural-language dates and times |
+| `friday/schedule.py` | Reminders and calendar events (SQLite) |
+| `friday/apps.py` | Start-menu app index, fuzzy matching, websites |
+| `friday/notify.py` | Windows toast notifications |
+| `friday/news.py`, `markets.py`, `briefing.py` | Briefing data and writing |
+| `friday/llm.py`, `voice.py`, `tasks.py` | Claude backends, speech output, to-do list |

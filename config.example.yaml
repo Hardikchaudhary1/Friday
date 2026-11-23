@@ -20,6 +20,20 @@ voice:
   edge_voice: "en-GB-SoniaNeural"
   rate: "+5%"
 
+listen:
+  whisper_model: "base.en"   # tiny.en is faster, small.en is more accurate
+  wake_words: ["friday", "hey friday"]
+
+reminders:
+  morning_hour: 9            # events remind you at this hour on the day
+  before_minutes: 30         # ...and this long before a timed event
+  # A date with no time ("remind me on Friday") also uses morning_hour.
+
+apps:
+  # Spoken name -> Start-menu app name. Friday already knows common ones.
+  aliases:
+    browser: "Brave"
+
 # Signal (companion project): clustered market events with expected reactions.
 # Friday uses it when it is running and falls back to raw headlines when it is not.
 signal:

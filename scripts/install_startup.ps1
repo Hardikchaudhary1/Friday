@@ -10,10 +10,11 @@ $lnkPath = Join-Path $startup "Friday Briefing.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut($lnkPath)
 $lnk.TargetPath = $python
-$lnk.Arguments = "-m friday brief --startup"
+# The always-on assistant: briefing once a day, reminders, voice and typed commands.
+$lnk.Arguments = "-m friday run --startup"
 $lnk.WorkingDirectory = $root
-$lnk.Description = "Friday morning briefing"
-$lnk.WindowStyle = 1
+$lnk.Description = "Friday assistant"
+$lnk.WindowStyle = 7   # start minimized; open the window from the taskbar to type commands
 $lnk.Save()
 Write-Host "Installed: $lnkPath"
-Write-Host "Friday will brief you at your next login (once per day)."
+Write-Host "Friday will start at your next login: briefing once per day, then reminders and voice commands."

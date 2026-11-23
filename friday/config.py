@@ -25,8 +25,9 @@ class Config:
 
     @property
     def data_dir(self) -> Path:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        return DATA_DIR
+        path = Path(self.raw["data_dir"]) if self.raw.get("data_dir") else DATA_DIR
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
 
 def load_config(path: Path | None = None) -> Config:

@@ -140,6 +140,31 @@ def cmd_say(args, cfg) -> int:
     return 0
 
 
+def cmd_run(args, cfg) -> int:
+    from .runtime import Runtime
+    if args.startup and cfg.get("briefing.once_per_day", True) and already_briefed_today(cfg):
+        _log("Today's briefing already played; starting without it.")
+    Runtime(cfg, use_voice_input=not args.no_mic, briefing_on_start=not args.no_briefing).run()
+    return 0
+
+
+def cmd_ask(args, cfg) -> int:
+    """One command, text in and text out. Add --speak to hear the answer."""
+    from .assistant import Assistant
+    reply = Assistant(cfg, dry_run=args.dry_run).handle(" ".join(args.text))
+    console.print(reply.text or f"({reply.action})")
+    if args.speak and reply.text:
+        from .voice import speak
+        speak(reply.text, cfg)
+    return 0
+
+
+def cmd_setup_voice(args, cfg) -> int:
+    from .listen import download_models
+    download_models(cfg, log=_log)
+    return 0
+
+
 def cmd_doctor(args, cfg) -> int:
     console.print(f"Claude CLI: {find_claude_cli(cfg.get('llm.claude_cli_path', '')) or '[red]not found[/red]'}")
     for b in build_backends(cfg):
@@ -153,6 +178,14 @@ def cmd_doctor(args, cfg) -> int:
         except Exception as exc:
             console.print(f"  {b.name}: [red]failed[/red] {exc}")
     console.print(f"Voice engine: {cfg.get('voice.engine')} / {cfg.get('voice.edge_voice')}")
+    from .listen import voice_input_ready
+    ok, reason = voice_input_ready(cfg)
+    console.print(f"Voice input: {'[green]' if ok else '[yellow]'}{reason}")
+    try:
+        import sounddevice as sd
+        console.print(f"Microphone: {sd.query_devices(kind='input')['name']}")
+    except Exception as exc:
+        console.print(f"Microphone: [red]{exc}[/red]")
     return 0
 
 
@@ -182,6 +215,21 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("doctor", help="check AI and voice backends")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("run", help="always-on assistant: voice, reminders, briefing")
+    p.add_argument("--no-mic", action="store_true", help="typed commands only")
+    p.add_argument("--no-briefing", action="store_true")
+    p.add_argument("--startup", action="store_true", help="logon mode")
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("ask", help="run one command, e.g. friday ask remind me to stretch in 10 minutes")
+    p.add_argument("text", nargs="+")
+    p.add_argument("--speak", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="don't actually open apps or websites")
+    p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("setup-voice", help="download the offline speech models (~190 MB)")
+    p.set_defaults(func=cmd_setup_voice)
 
     args = parser.parse_args(argv)
     return args.func(args, load_config())

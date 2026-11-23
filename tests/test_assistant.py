@@ -99,6 +99,31 @@ def test_event_with_time_gets_two_reminders(friday):
                       "I'll remind you that morning and 30 minutes before.")
     reminders = friday.schedule.pending_reminders()
     assert [x.due_at for x in reminders] == [datetime(2026, 12, 5, 9, 0), datetime(2026, 12, 5, 15, 30)]
+    assert [x.text for x in reminders] == ["Today: dentist appointment at 4 PM", "In 30 minutes: dentist appointment"]
+
+
+# ---- speech clean-up and wake word ---------------------------------------------------
+
+@pytest.mark.parametrize("heard, cleaned", [
+    ("Friday, open, Spotify.", "open Spotify"),
+    ("Hey Friday, remind me to call mom tomorrow at 5 p.m.", "remind me to call mom tomorrow at 5 pm"),
+    ("Okay Friday, what are my tasks?", "what are my tasks"),
+])
+def test_normalise_speech(heard, cleaned):
+    from friday.assistant import normalise_speech
+    assert normalise_speech(heard) == cleaned
+
+
+@pytest.mark.parametrize("transcript, ok", [
+    ("Friday, open Spotify.", True), ("Okay Friday, what are my tasks?", True),
+    ("so um Friday open notes", True), ("Fri day, brief me", True),
+    ("What is the weather like in London today?", False),
+    ("I'm free on Monday, why don't we meet then?", False),
+    ("Let's meet next week on Friday afternoon if that works for everyone", False),
+])
+def test_wake_word_confirmed(transcript, ok):
+    from friday.listen import wake_word_confirmed
+    assert wake_word_confirmed(transcript) is ok
 
 
 def test_all_day_event_and_calendar_phrase(friday):

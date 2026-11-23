@@ -6,6 +6,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import queue
+import re
 import threading
 import time
 from collections import deque
@@ -18,6 +19,18 @@ BLOCK = 4000                      # 0.25 s of audio per block
 VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
 VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
 WHISPER_HINT = "Friday, open, remind me, tomorrow, calendar, event, task, briefing, search for."
+# Vosk is limited to a small vocabulary so it stays cheap; without other words to choose
+# from it would label any speech "friday". These decoys soak up everything else.
+DECOY_WORDS = ["monday", "today", "fried", "free", "right", "five", "the", "what", "is", "it", "a", "and",
+               "i", "you", "to", "of", "in", "that", "this", "for", "on", "with", "my", "can", "weather",
+               "day", "find", "fine", "why", "time", "red", "ready", "friend", "fight", "eye"]
+# "Friday" within the first few words; the 2 s buffer may catch the end of an earlier sentence.
+_WAKE_IN_TEXT = re.compile(r"^\W*(\w+\W+){0,3}?fri\s?day\b", re.I)
+
+
+def wake_word_confirmed(transcript: str) -> bool:
+    """Whisper's transcript must contain the wake word near its start."""
+    return bool(_WAKE_IN_TEXT.search(transcript))
 
 
 def models_dir(cfg) -> Path:
@@ -114,7 +127,7 @@ class Listener(threading.Thread):
         SetLogLevel(-1)
         wake_words = self.cfg.get("listen.wake_words", ["friday", "hey friday"])
         model = Model(str(vosk_model_path(self.cfg)))
-        rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(wake_words + ["[unk]"]))
+        rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(wake_words + DECOY_WORDS + ["[unk]"]))
         self._load_whisper()
         self.log("Listening for \"Friday\" (or press Ctrl+Alt+F).")
 
@@ -142,7 +155,7 @@ class Listener(threading.Thread):
                     heard = json.loads(rec.Result()).get("text", "")
                 else:
                     heard = json.loads(rec.PartialResult()).get("partial", "")
-                if "friday" in heard:
+                if re.search(r"\bfriday\b", heard):
                     rec.Reset()
                     self._take_command(include_ring=True)
                     rec.Reset()
@@ -163,6 +176,10 @@ class Listener(threading.Thread):
             self.log("(heard nothing)")
             return
         text = self._transcribe(audio)
+        if include_ring and not wake_word_confirmed(text):
+            # Woken by the voice trigger but Whisper didn't hear "Friday": a false alarm.
+            self.log(f"(ignored: {text!r})")
+            return
         if text:
             self.on_command(text)
 

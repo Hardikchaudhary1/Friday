@@ -138,7 +138,8 @@ class ScheduleStore:
         morning = datetime.combine(day, time(morning_hour))
         start = datetime.combine(day, at) if at else None
         if morning > now and (start is None or morning < start - timedelta(minutes=before_minutes)):
-            reminders.append(self.add_reminder(f"Today: {event.spoken(day)}", morning, event.id))
+            label = f"Today: {title}" + (f" at {_spoken_time(at)}" if at else "")
+            reminders.append(self.add_reminder(label, morning, event.id))
         if start:
             before = start - timedelta(minutes=before_minutes)
             if before > now:

@@ -15,7 +15,17 @@ from .schedule import ScheduleStore, spoken_datetime
 from .tasks import TaskStore
 from .timeparse import parse
 
-WAKE_PREFIX = re.compile(r"^\s*((hey|hi|ok|okay)\s+)?friday\b[\s,.!?]*", re.I)
+WAKE_PREFIX = re.compile(r"^\s*((hey|hi|ok|okay)[\s,]+)?friday\b[\s,.!?]*", re.I)
+
+
+def normalise_speech(raw: str) -> str:
+    """Cleans a transcript: drops the wake word, the punctuation speech-to-text adds
+    ("open, Spotify"), and writes "5 p.m." as "5 pm"."""
+    text = (raw or "").replace("﻿", "")
+    text = re.sub(r"\b([ap])\.\s?m\b\.?", r"\1m", text, flags=re.I)
+    text = WAKE_PREFIX.sub("", text)
+    text = re.sub(r"\s*[,;:]\s*", " ", text)
+    return re.sub(r"\s{2,}", " ", text).strip(" .!?")
 
 
 @dataclass
@@ -85,7 +95,7 @@ class Assistant:
     # ---- entry point -----------------------------------------------------
 
     def handle(self, raw: str) -> Reply:
-        text = WAKE_PREFIX.sub("", (raw or "").replace("﻿", "")).strip(" .,!?")
+        text = normalise_speech(raw)
         if not text:
             return Reply("Yes?")
 

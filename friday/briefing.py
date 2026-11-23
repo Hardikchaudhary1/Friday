@@ -163,12 +163,12 @@ MY WEATHER, CALENDAR AND REMINDERS TODAY
 {agenda_lines}
 
 Structure, about {words} words in total:
-1. A one-line greeting with the day.
-2. Markets in two to four sentences: the overall mood, then the biggest moves worth knowing.
-3. The three to five themes from the news most likely to move global markets today, each with why it matters.
-4. My day: the weather in one sentence if it is given, today's events and reminders with their times, then my tasks (how many, anything overdue,
+1. Markets in two to four sentences: the overall mood, then the biggest moves worth knowing.
+2. The three to five themes from the news most likely to move global markets today, each with why it matters.
+3. My day: the weather in one sentence if it is given, today's events and reminders with their times, then my tasks (how many, anything overdue,
    and a sensible order if it is obvious).
-5. One short closing line.
+4. One short closing line.
+Do not greet me or say my name at the start: Friday already greeted me. Begin directly with the markets.
 """
 
 
@@ -189,7 +189,7 @@ def template_briefing(cfg, data: BriefingData, now: datetime | None = None) -> s
     """No-AI fallback: a plain read-out of the data."""
     now = now or datetime.now()
     name = cfg.get("user_name", "there")
-    parts = [f"Good {_part_of_day(now)}, {name}. It's {now:%A} {now.day} {now:%B}."]
+    parts = []   # no greeting here: Friday greets once, when it comes online
 
     movers = biggest_movers(data.quotes)
     if movers:

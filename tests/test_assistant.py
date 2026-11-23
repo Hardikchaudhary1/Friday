@@ -345,6 +345,14 @@ def test_loose_next_previous(friday, heard, key):
     assert friday.handle(heard).data == {"media": key}
 
 
+def test_greeting_when_online(tmp_path):
+    from friday.runtime import Runtime
+    rt = Runtime(Config({"user_name": "Boss", "data_dir": str(tmp_path)}), use_voice_input=False)
+    assert rt.greeting(8) == "Good morning, Boss. Friday is online."
+    assert rt.greeting(14) == "Good afternoon, Boss. Friday is online."
+    assert rt.greeting(21) == "Good evening, Boss. Friday is online."
+
+
 # ---- weather and browsers ------------------------------------------------------------
 
 @pytest.fixture

@@ -186,14 +186,12 @@ class Runtime:
         if self.use_voice_input:
             self._start_voice_input()
 
+        # Greet once, when Friday comes online; the briefing itself starts straight with the news.
+        self.say(self.greeting())
         if self.briefing_on_start and not already_briefed_today(self.cfg):
-            hour = datetime.now().hour
-            greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
-            self.say(f"{greeting}, {self.cfg.get('user_name', '')}. Give me a moment to prepare your briefing.")
+            self.say("Your briefing is coming up.")
             if wait_for_network(90):
                 threading.Thread(target=self.run_briefing, daemon=True).start()
-        else:
-            self.say("Friday is online.")
 
         console.print("[dim]Type a command and press Enter (or say \"Friday ...\"). Type 'quit' to exit.[/dim]")
         try:
@@ -208,9 +206,16 @@ class Runtime:
         self.shutdown.set()
         self.interrupt()
 
+    def greeting(self, hour: int | None = None) -> str:
+        hour = datetime.now().hour if hour is None else hour
+        part = "Good morning" if 5 <= hour < 12 else "Good afternoon" if 12 <= hour < 17 else "Good evening"
+        name = self.cfg.get("user_name", "")
+        return f"{part}{', ' + name if name else ''}. Friday is online."
+
     def common_phrases(self) -> list[str]:
         """Replies Friday says often. Generating them once means they play instantly afterwards."""
-        phrases = ["One moment.", "Yes?", "Sound on.", "Friday is online.", "You're welcome.", "Which app should I open?",
+        phrases = [self.greeting(h) for h in (8, 14, 20)] + ["Your briefing is coming up."]
+        phrases += ["One moment.", "Yes?", "Sound on.", "You're welcome.", "Which app should I open?",
                    "What should I remind you about?", "Your task list is empty.", "You have no upcoming reminders.",
                    "Nothing on your calendar today.", "Nothing on your calendar tomorrow.", "Here's your briefing."]
         phrases += [f"Volume {v} percent." for v in range(0, 101, 5)]

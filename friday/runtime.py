@@ -24,6 +24,7 @@ class Runtime:
     def __init__(self, cfg, use_voice_input: bool = True, briefing_on_start: bool = True):
         self.cfg = cfg
         self.assistant = Assistant(cfg)
+        self.assistant.on_thinking = lambda: self.say("One moment.")
         self.schedule = ScheduleStore(cfg.data_dir / "friday.db")
         self.use_voice_input = use_voice_input
         self.briefing_on_start = briefing_on_start
@@ -83,6 +84,8 @@ class Runtime:
             self.say(reply.text)
             threading.Thread(target=self.run_briefing, daemon=True).start()
         else:
+            if not reply.text and reply.data.get("media"):
+                console.print(f"[dim]({reply.data['media'].replace('_', '/')})[/dim]")
             self.say(reply.text)
             # Friday asked something ("When should I remind you?"): listen for the answer
             # without needing the wake word again.
@@ -128,6 +131,7 @@ class Runtime:
 
         threading.Thread(target=self._speaker_loop, daemon=True, name="friday-speaker").start()
         threading.Thread(target=self._reminder_loop, daemon=True, name="friday-reminders").start()
+        threading.Thread(target=self._prewarm_voice, daemon=True, name="friday-prewarm").start()
 
         if self.use_voice_input:
             self._start_voice_input()
@@ -154,6 +158,29 @@ class Runtime:
         self.shutdown.set()
         self.interrupt()
 
+    def common_phrases(self) -> list[str]:
+        """Replies Friday says often. Generating them once means they play instantly afterwards."""
+        phrases = ["One moment.", "Yes?", "Sound on.", "Friday is online.", "You're welcome.", "Which app should I open?",
+                   "What should I remind you about?", "Your task list is empty.", "You have no upcoming reminders.",
+                   "Nothing on your calendar today.", "Nothing on your calendar tomorrow.", "Here's your briefing."]
+        phrases += [f"Volume {v} percent." for v in range(0, 101, 5)]
+        try:
+            apps = self.assistant.apps.apps()
+        except Exception:
+            apps = []
+        phrases += [f"Opening {a.spoken_name}." for a in apps]
+        from .apps import WEBSITES
+        phrases += [f"Opening {site}." for site in WEBSITES]
+        return phrases
+
+    def _prewarm_voice(self):
+        if self.cfg.get("voice.engine", "edge") != "edge":
+            return
+        from .voice import prewarm
+        time.sleep(20)  # let startup (briefing, models) go first
+        prewarm(self.common_phrases(), self.cfg.get("voice.edge_voice", "en-GB-SoniaNeural"),
+                self.cfg.get("voice.rate", "+0%"))
+
     def _start_voice_input(self):
         from .listen import Hotkey, Listener, voice_input_ready
 
@@ -167,10 +194,16 @@ class Runtime:
         except Exception:
             beep = None
 
+        from .media import Ducker
+        ducker = Ducker(level=float(self.cfg.get("listen.duck_level", 0.3)))
+
         def on_wake():
             self.interrupt()
             if beep:
                 beep()
+            # Turn music down while you speak, so Friday can hear you over it.
+            if self.cfg.get("listen.duck_while_listening", True):
+                ducker.duck()
 
         def vocabulary():
             from .apps import WEBSITES
@@ -182,7 +215,7 @@ class Runtime:
 
         self.listener = Listener(self.cfg, on_command=lambda t: self.handle(t), is_speaking=self.speaking.is_set,
                                  on_wake=on_wake, log=lambda m: console.print(f"[dim]{m}[/dim]"),
-                                 vocabulary=vocabulary)
+                                 vocabulary=vocabulary, on_heard=ducker.restore)
         self.listener.start()
 
         def hotkey_pressed():

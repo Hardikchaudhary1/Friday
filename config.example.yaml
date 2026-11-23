@@ -12,6 +12,9 @@ llm:
   claude_cli_path: ""          # empty = find it automatically
   claude_cli_model: ""         # empty = your subscription's default model
   api_model: "claude-opus-5-5"
+  # Spoken questions use a faster model, since you're waiting for the answer.
+  chat_cli_model: "haiku"
+  chat_api_model: "claude-haiku-5-5"
   timeout_seconds: 180
 
 voice:
@@ -23,6 +26,12 @@ voice:
 listen:
   whisper_model: "base.en"   # tiny.en is faster, small.en is more accurate
   wake_words: ["friday", "hey friday"]
+  duck_while_listening: true # turn music down while you speak a command
+  duck_level: 0.3            # ...to 30% of its volume
+  end_silence_s: 0.6         # pause that ends a command; raise it if Friday cuts you off
+
+media:
+  default_player: youtube    # "play <song>" with no app named: youtube or spotify
 
 reminders:
   morning_hour: 9            # events remind you at this hour on the day

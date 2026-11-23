@@ -24,6 +24,12 @@ notifications and are spoken aloud when they are due.
 |---|---|
 | "Friday, open Spotify" / "open VS Code" / "open YouTube" / "open github dot com" | Opens Start-menu apps (fuzzy matched) or websites |
 | "Search for Brent crude price" | Web search in your browser |
+| "Pause" / "Resume" / "Next song" / "Skip" / "Previous track" / "Stop the music" | Media keys: works with Spotify, YouTube in the browser, most players |
+| "Set volume to 40" / "Turn it up" / "Quieter" / "Mute" / "What's the volume?" | Exact system volume |
+| "Play lofi beats on YouTube" / "Play interstellar soundtrack" | Opens and plays the top YouTube result |
+| "Play Blinding Lights on Spotify" | Opens Spotify's search for it |
+| "Search mechanical keyboards on Amazon" / "Look up fastapi on GitHub" | Site search (Amazon, GitHub, Wikipedia, Reddit, LinkedIn, Maps, ...) |
+| "Close Spotify" / "Switch to Brave" | Closes (like clicking X) or brings forward a running app |
 | "Remind me to call mom tomorrow at 5 PM" / "...in 20 minutes" / "...on Friday" | Reminder; asks "when?" if you leave the time out |
 | "Add dentist appointment on 5th December at 4 PM" / "Put mom's birthday on 12 January in my calendar" | Calendar event, reminded that morning and 30 minutes before |
 | "What's on my schedule tomorrow?" / "What do I have this week?" | Reads your events |
@@ -39,6 +45,9 @@ Wake it by saying **"Friday"** or pressing **Ctrl+Alt+F**. You can also type com
 - **Offline voice pipeline**: Vosk listens only for the wake word (cheap enough to run all day); Whisper
   (faster-whisper, int8 on CPU) transcribes the command. The last 2 s of audio are kept, so
   "Friday, open Spotify" works in one breath. Friday stops listening while it speaks so it doesn't hear itself.
+- **Built for speed**: replies stream as they are generated, common phrases are pre-generated and cached
+  (about 0.1 s to start speaking), media commands answer silently, music is turned down while you speak,
+  and spoken questions use a fast model with an instant "One moment" while it thinks.
 - **Natural dates**: "tomorrow at 5", "next Wednesday at 3 PM", "in 2 hours", "on the 28th at 11:30"
   (dateparser plus fixes for bare hours and false matches like "email to May").
 - **Reminders that survive restarts**: stored in SQLite; anything missed while the laptop was off is

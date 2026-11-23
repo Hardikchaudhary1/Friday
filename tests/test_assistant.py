@@ -210,6 +210,64 @@ def test_search(friday):
     assert friday.handle("search for brent crude price").text == "Searching the web for brent crude price."
 
 
+# ---- media, volume, sites and windows -------------------------------------------------
+
+@pytest.mark.parametrize("said, key", [
+    ("pause", "play_pause"), ("pause the music", "play_pause"), ("resume", "play_pause"),
+    ("play", "play_pause"), ("stop the music", "play_pause"), ("play some music", "play_pause"),
+    ("next song", "next"), ("skip", "next"), ("skip this one", "next"),
+    ("previous track", "previous"), ("go back", "previous"),
+])
+def test_media_keys(friday, said, key):
+    r = friday.handle(f"Friday, {said}")
+    assert r.text == "" and r.data == {"media": key}
+
+
+def test_bare_stop_stops_friday_not_music(friday):
+    assert friday.handle("stop").action == "stop"
+
+
+@pytest.mark.parametrize("said, reply", [
+    ("set volume to 40", "Volume 40 percent."), ("volume 75 percent", "Volume 75 percent."),
+    ("turn it up", "Volume up."), ("quieter please", "Volume down."), ("lower the volume a little", "Volume down."),
+    ("unmute", "Sound on."), ("mute", ""),
+])
+def test_volume_commands(friday, said, reply):
+    assert friday.handle(said).text == reply
+
+
+@pytest.mark.parametrize("said, reply", [
+    ("play lofi beats on spotify", "Searching Spotify for lofi beats."),
+    ("play the song blinding lights on youtube", "Playing blinding lights on YouTube."),
+    ("play interstellar soundtrack", "Playing interstellar soundtrack on YouTube."),
+    ("search for mechanical keyboards on amazon", "Searching Amazon for mechanical keyboards."),
+    ("look up fastapi on github", "Searching Github for fastapi."),
+    ("search youtube for python tutorials", "Searching Youtube for python tutorials."),
+])
+def test_play_and_site_search(friday, said, reply):
+    assert friday.handle(said).text == reply
+
+
+def test_close_and_switch(friday):
+    friday.window_lister = lambda: [
+        {"pid": 1, "name": "Spotify", "title": "Spotify Premium"},
+        {"pid": 2, "name": "brave", "title": "YouTube - Brave"},
+        {"pid": 3, "name": "explorer", "title": "Downloads"},
+    ]
+    assert friday.handle("close spotify").text == "Closing Spotify."
+    assert friday.handle("switch to brave").text == "Switching to Brave."
+    assert friday.handle("close explorer").text == "I won't close explorer by voice, to be safe."
+    assert friday.handle("close notepad").text == "notepad doesn't seem to be open."
+    assert friday.handle("close friday").text == "To close me, type quit in my window."
+    assert friday.handle("switch to calculator").text == "Opening Calculator."  # not running: opens it
+
+
+def test_site_search_urls():
+    from friday.media import search_site
+    assert search_site("amazon", "usb c hub", dry_run=True) == "https://www.amazon.com/s?k=usb+c+hub"
+    assert search_site("maps", "coffee near me", dry_run=True) == "https://www.google.com/maps/search/coffee%20near%20me"
+
+
 # ---- misc ----------------------------------------------------------------------------
 
 def test_small_talk_and_fallback(friday):

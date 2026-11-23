@@ -77,9 +77,10 @@ class ClaudeCliBackend:
 class AnthropicApiBackend:
     name = "anthropic_api"
 
-    def __init__(self, model: str = "claude-opus-5-5", timeout: int = 180):
+    def __init__(self, model: str = "claude-opus-5-5", timeout: int = 180, low_effort: bool = False):
         self.model = model
         self.timeout = timeout
+        self.effort = "low" if low_effort else "medium"
 
     def available(self) -> bool:
         return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
@@ -93,7 +94,7 @@ class AnthropicApiBackend:
                 model=self.model,
                 max_tokens=16000,
                 system=system,
-                output_config={"effort": "medium"},
+                output_config={"effort": self.effort},
                 # If the main model declines, the API retries on a suitable fallback model.
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
@@ -114,12 +115,20 @@ class AnthropicApiBackend:
         return text
 
 
-def build_backends(cfg) -> list:
+def build_backends(cfg, purpose: str = "briefing") -> list:
+    """purpose="chat" is for spoken questions: a faster model, because you're waiting for the answer."""
     timeout = int(cfg.get("llm.timeout_seconds", 180))
+    if purpose == "chat":
+        cli_model = cfg.get("llm.chat_cli_model", "haiku")
+        api_model = cfg.get("llm.chat_api_model", "claude-haiku-5-5")
+        timeout = min(timeout, 45)
+    else:
+        cli_model = cfg.get("llm.claude_cli_model", "")
+        api_model = cfg.get("llm.api_model", "claude-opus-5-5")
     backends = []
     for name in cfg.get("llm.order", ["claude_cli", "anthropic_api", "template"]):
         if name == "claude_cli":
-            backends.append(ClaudeCliBackend(cfg.get("llm.claude_cli_path", ""), cfg.get("llm.claude_cli_model", ""), timeout))
+            backends.append(ClaudeCliBackend(cfg.get("llm.claude_cli_path", ""), cli_model, timeout))
         elif name == "anthropic_api":
-            backends.append(AnthropicApiBackend(cfg.get("llm.api_model", "claude-opus-5-5"), timeout))
+            backends.append(AnthropicApiBackend(api_model, timeout, low_effort=purpose == "chat"))
     return backends

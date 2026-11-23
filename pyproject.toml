@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-voice = ["sounddevice>=0.4", "vosk>=0.3.41", "faster-whisper>=1.0", "numpy>=1.26"]
+voice = ["sounddevice>=0.4", "vosk>=0.3.41", "faster-whisper>=1.0", "numpy>=1.26", "pycaw>=20240210"]
 
 [project.scripts]
 friday = "friday.__main__:main"

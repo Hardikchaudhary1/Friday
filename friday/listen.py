@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 SAMPLE_RATE = 16000
-BLOCK = 4000                      # 0.25 s of audio per block
+BLOCK = 1600                      # 0.1 s of audio per block: quicker wake-word and end-of-speech detection
 VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
 VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
 WHISPER_HINT = "Friday, open, remind me, tomorrow, calendar, event, task, briefing, search for."
@@ -108,15 +108,16 @@ class Hotkey(threading.Thread):
 class Listener(threading.Thread):
     """Waits for "Friday" (or the hotkey), records what follows, and hands the text to on_command."""
 
-    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print, vocabulary=None):
+    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print, vocabulary=None, on_heard=None):
         super().__init__(daemon=True, name="friday-listener")
         self.cfg, self.on_command, self.is_speaking, self.on_wake, self.log = cfg, on_command, is_speaking, on_wake, log
+        self.on_heard = on_heard   # called once recording ends (e.g. to bring the music volume back)
         # Names Whisper should expect (installed apps, websites), so "open Spotify" isn't heard as "open 45".
         self.hotwords = build_hotwords(vocabulary() if vocabulary else [])
         self.audio: queue.Queue[bytes] = queue.Queue()
         self.trigger = threading.Event()
         self.stop = threading.Event()
-        self.ring: deque[bytes] = deque(maxlen=8)  # last 2 s, so "Friday, open Spotify" in one breath works
+        self.ring: deque[bytes] = deque(maxlen=20)  # last 2 s, so "Friday, open Spotify" in one breath works
         self.noise_floor = 300.0
         self.whisper = None
 
@@ -187,11 +188,17 @@ class Listener(threading.Thread):
         name = self.cfg.get("listen.whisper_model", "base.en")
         self.whisper = WhisperModel(name, device="cpu", compute_type="int8",
                                     download_root=str(models_dir(self.cfg) / "whisper"))
+        # The first transcription is slow while the model warms up; do it now, not on your first command.
+        list(self.whisper.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), language="en", beam_size=1)[0])
 
     def _take_command(self, include_ring: bool):
         if self.on_wake:
             self.on_wake()
-        audio = self._record(list(self.ring) if include_ring else [])
+        try:
+            audio = self._record(list(self.ring) if include_ring else [])
+        finally:
+            if self.on_heard:
+                self.on_heard()
         self.ring.clear()
         if audio is None:
             self.log("(heard nothing)")
@@ -204,11 +211,13 @@ class Listener(threading.Thread):
         if text:
             self.on_command(text)
 
-    def _record(self, prefix: list[bytes], max_s: float = 9.0, wait_s: float = 5.0, silence_s: float = 0.9):
+    def _record(self, prefix: list[bytes], max_s: float = 9.0, wait_s: float = 5.0, silence_s: float | None = None):
         """Records until the speaker pauses. Returns float32 audio, or None if nobody spoke."""
+        # How long a pause ends the command. Shorter is snappier; too short cuts you off mid-sentence.
+        silence_s = silence_s if silence_s is not None else float(self.cfg.get("listen.end_silence_s", 0.6))
         threshold = max(450.0, self.noise_floor * 2.5)
         blocks = list(prefix)
-        started = any(self._rms(b) > threshold for b in prefix[-2:])
+        started = any(self._rms(b) > threshold for b in prefix[-5:])
         quiet = 0.0
         t0 = time.time()
         while time.time() - t0 < max_s:
@@ -232,7 +241,8 @@ class Listener(threading.Thread):
         return pcm
 
     def _transcribe(self, audio: np.ndarray) -> str:
-        segments, _ = self.whisper.transcribe(audio, language="en", beam_size=5, initial_prompt=WHISPER_HINT,
+        # Greedy decoding (beam 1): about 20% faster, with the app-name hints keeping accuracy.
+        segments, _ = self.whisper.transcribe(audio, language="en", beam_size=1, initial_prompt=WHISPER_HINT,
                                               hotwords=self.hotwords or None,
                                               condition_on_previous_text=False, vad_filter=False)
         return " ".join(s.text.strip() for s in segments).strip()

@@ -64,6 +64,26 @@ R_SCHEDULE = _rx(r"\b(what('s| is)|show|read|tell me)( me)? (on )?my (schedule|c
 R_REMINDERS = _rx(r"\b(what are|list|show|read)( me)? my reminders\b|\bupcoming reminders\b|\bany reminders\b")
 R_CANCEL_REMINDER = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(last\s+)?reminder(\s+(to|about|for)\s+(.+))?$")
 R_CANCEL_EVENT = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(event|meeting|appointment)\s+(.+)$")
+# ---- media, volume, sites, windows ----
+_MEDIA_OBJ = r"( the| this| that| my)?( music| song| track| video| it| playback| spotify| youtube| audio)?"
+# A bare "stop" stops Friday talking; "stop the music" pauses media.
+R_PAUSE = _rx(rf"^(pause|resume|unpause|continue|play){_MEDIA_OBJ}( please)?$|^play (some )?music$|"
+              r"^stop( the| this| my)? (music|song|track|video|playback|spotify|youtube|audio)$")
+R_NEXT = _rx(rf"^(next|skip|skip ahead|play the next){_MEDIA_OBJ}( please)?$|^(next one|skip this( one)?)$")
+R_PREV = _rx(rf"^(previous|go back|back|last|play the previous|replay){_MEDIA_OBJ}( please)?$|^(previous one)$")
+R_VOL_SET = _rx(r"^(set |turn |change )?(the )?volume (to |at )?(\d{1,3})( percent| %|%)?$")
+R_VOL_STEP = _rx(r"^(turn (it|the volume|the music) (up|down)|volume (up|down)|(louder|quieter|softer)( please)?|"
+                 r"(increase|decrease|raise|lower|reduce) (the )?volume)( a (lot|little|bit))?$")
+R_MUTE = _rx(r"^(mute|unmute)( the)?( sound| audio| volume| music| it)?$")
+R_WHAT_VOL = _rx(r"^what('s| is) the volume$")
+R_PLAY_ON = _rx(r"^play (.+?) on (youtube|spotify)$")
+R_PLAY_ANY = _rx(r"^play (.+)$")
+R_SEARCH_ON = _rx(r"^(search|look up|find|look for)( for)? (.+?) on (youtube|google|amazon|github|wikipedia|reddit|"
+                  r"linkedin|spotify|netflix|twitter|x|maps|google maps|news|images|tradingview)$")
+R_SEARCH_SITE_FIRST = _rx(r"^search (youtube|google|amazon|github|wikipedia|reddit|linkedin|spotify|netflix|maps|news)"
+                          r" for (.+)$")
+R_CLOSE = _rx(r"^(close|quit|exit|shut down|kill)\s+(.+)$")
+R_FOCUS = _rx(r"^(switch to|go to|focus( on)?|bring up|go back to)\s+(.+)$")
 R_BRIEF = _rx(r"\b(brief me|briefing|market (update|news|summary)|what('s| is) (happening|going on)|the news|headlines)\b")
 
 
@@ -90,6 +110,8 @@ class Assistant:
         self.dry_run = dry_run
         self.llm_backends = llm_backends
         self.pending: dict | None = None   # a follow-up question waiting for an answer
+        self.on_thinking = None            # called before a slow Claude answer
+        self.window_lister = None          # tests replace the live window list
         self.morning_hour = int(cfg.get("reminders.morning_hour", 9))
         self.before_minutes = int(cfg.get("reminders.before_minutes", 30))
 
@@ -106,6 +128,14 @@ class Assistant:
                 return self._answer_pending(pending, text)
 
         for pattern, handler in (
+            # Media first: these are short and said mid-task, so they must be quick and silent.
+            (R_PAUSE, lambda m: self._media("play_pause")),
+            (R_NEXT, lambda m: self._media("next")),
+            (R_PREV, lambda m: self._media("previous")),
+            (R_VOL_SET, lambda m: self._volume_set(int(m.group(4)))),
+            (R_VOL_STEP, self._volume_step),
+            (R_MUTE, lambda m: self._mute(m.group(1).lower() == "mute")),
+            (R_WHAT_VOL, lambda m: self._volume_report()),
             (R_STOP, lambda m: Reply("", "stop")),
             (R_GREET, lambda m: Reply(f"Hello {self.cfg.get('user_name', '')}. How can I help?".replace("  ", " "))),
             (R_THANKS, lambda m: Reply("You're welcome.")),
@@ -121,7 +151,13 @@ class Assistant:
             (R_REMINDERS, lambda m: self._list_reminders()),
             (R_EVENT, self._event),   # before R_SCHEDULE: "put X in my calendar" adds, it doesn't ask
             (R_SCHEDULE, lambda m: self._schedule(text)),
+            (R_CLOSE, lambda m: self._close(m.group(2))),
+            (R_FOCUS, lambda m: self._focus(m.group(3))),
             (R_OPEN, lambda m: self._open(m.group(3))),
+            (R_PLAY_ON, lambda m: self._play(m.group(1), m.group(2).lower())),
+            (R_PLAY_ANY, lambda m: self._play(m.group(1), None)),
+            (R_SEARCH_ON, lambda m: self._search_site(m.group(4), m.group(3))),
+            (R_SEARCH_SITE_FIRST, lambda m: self._search_site(m.group(1), m.group(2))),
             (R_SEARCH, lambda m: Reply(web_search(m.group(5), self.dry_run).message)),
             (R_TIME, lambda m: Reply(f"It's {self._clock(self.now())}.")),
             (R_DATE, lambda m: Reply(f"It's {self.now():%A} {self.now().day} {self.now():%B} {self.now().year}.")),
@@ -167,6 +203,85 @@ class Assistant:
         if not result.ok:
             return self._ask("open_name", f"{result.message.rstrip('.')}. Which app should I open?")
         return Reply(result.message, data={"target": result.target})
+
+    # ---- media and windows ---------------------------------------------------
+
+    def _media(self, key: str) -> Reply:
+        from . import media
+        media.press(key, self.dry_run)
+        # Quiet confirmation: an empty reply means Friday doesn't talk over your music.
+        return Reply("", data={"media": key})
+
+    def _volume_set(self, percent: int) -> Reply:
+        from . import media
+        if not self.dry_run:
+            percent = media.set_volume(percent)
+        return Reply(f"Volume {min(100, percent)} percent.")
+
+    def _volume_step(self, m: re.Match) -> Reply:
+        from . import media
+        text = m.group(0).lower()
+        up = bool(re.search(r"\bup\b|louder|increase|raise", text))
+        step = 25 if "a lot" in text else 5 if re.search(r"a (little|bit)", text) else 10
+        if self.dry_run:
+            return Reply(f"Volume {'up' if up else 'down'}.", data={"step": step if up else -step})
+        new = media.set_volume(media.get_volume() + (step if up else -step))
+        return Reply(f"Volume {new} percent.")
+
+    def _mute(self, mute: bool) -> Reply:
+        from . import media
+        if not self.dry_run:
+            media.set_mute(mute)
+        return Reply("" if mute else "Sound on.")
+
+    def _volume_report(self) -> Reply:
+        from . import media
+        if media.is_muted():
+            return Reply("The sound is muted.")
+        return Reply(f"The volume is at {media.get_volume()} percent.")
+
+    def _play(self, what: str, where: str | None) -> Reply:
+        from . import media
+        what = re.sub(r"^(the song|the video|song|video|some)\s+", "", what.strip(), flags=re.I)
+        where = where or self.cfg.get("media.default_player", "youtube")
+        if where == "spotify":
+            media.search_site("spotify", what, self.dry_run)
+            return Reply(f"Searching Spotify for {what}.")
+        found, _ = media.play_on_youtube(what, self.dry_run) if not self.dry_run else (True, "")
+        return Reply(f"Playing {what} on YouTube." if found else f"Here are the YouTube results for {what}.")
+
+    def _search_site(self, site: str, query: str) -> Reply:
+        from . import media
+        media.search_site(site.lower(), query, self.dry_run)
+        return Reply(f"Searching {site.title() if site.lower() != 'x' else 'X'} for {query}.")
+
+    def _windows(self):
+        return self.window_lister() if self.window_lister else None
+
+    def _close(self, name: str) -> Reply:
+        from . import media
+        if re.fullmatch(r"(friday|yourself|you)", name.strip(), re.I):
+            return Reply("To close me, type quit in my window.")
+        w, score = media.find_window(name, self._windows())
+        if not w or score < 0.6:
+            return Reply(f"{name} doesn't seem to be open.")
+        if w["name"].lower() in media.PROTECTED:
+            return Reply(f"I won't close {w['name']} by voice, to be safe.")
+        if not self.dry_run:
+            media.close_window(w)
+        return Reply(f"Closing {w['name'].title() if w['name'].islower() else w['name']}.")
+
+    def _focus(self, name: str) -> Reply | None:
+        from . import media
+        if re.fullmatch(r"(my )?(schedule|calendar|agenda|tasks|reminders)", name.strip(), re.I):
+            return None  # "show my calendar" is a question, handled later
+        w, score = media.find_window(name, self._windows())
+        if not w or score < 0.6:
+            # Not running: open it instead.
+            return self._open(name)
+        if not self.dry_run:
+            media.focus_window(w)
+        return Reply(f"Switching to {w['name'].title() if w['name'].islower() else w['name']}.")
 
     def _login(self) -> Reply:
         """Opens a PowerShell window that runs the Claude CLI sign-in (browser based)."""
@@ -331,16 +446,20 @@ class Assistant:
     def _ask_claude(self, text: str) -> Reply:
         from .llm import LLMError, build_backends
 
-        backends = self.llm_backends if self.llm_backends is not None else build_backends(self.cfg)
+        backends = self.llm_backends if self.llm_backends is not None else build_backends(self.cfg, purpose="chat")
         now = self.now()
         system = (
             "You are Friday, a concise voice assistant. Your answer is spoken aloud: plain sentences, no markdown, "
             "no lists, at most three short sentences. If you are unsure or the question needs live data you don't "
             f"have, say so briefly. Current local time: {now:%A %d %B %Y %H:%M}."
         )
+        announced = False
         for backend in backends:
             if not backend.available():
                 continue
+            if not announced and self.on_thinking:
+                self.on_thinking()   # e.g. say "One moment." so a slow answer doesn't feel like silence
+                announced = True
             try:
                 return Reply(backend.complete(system, text))
             except LLMError:

@@ -363,6 +363,9 @@ class FakeSignal:
                                                                        "Airline stocks down (confidence 0.5)"]},
                 {"title": "Fed signals another hike", "impacts": []}][:limit]
 
+    def status(self, cfg):
+        return {"stories": 196, "articles": 239}
+
     def risk(self, cfg):
         return {"assets": [{"label": "Brent crude", "pressure": 3.2}, {"label": "Nasdaq", "pressure": -1.1}],
                 "regions": [{"region": "Middle East"}, {"region": "United States"}]}
@@ -370,7 +373,12 @@ class FakeSignal:
 
 def test_signal_commands(friday):
     friday.signal_api = FakeSignal()
-    assert friday.handle("Friday, open the dashboard").text == "Opening your market dashboard."
+    assert friday.handle("read it").text.startswith("Read what?")   # nothing shown yet
+    assert friday.handle("Friday, open dashboard").text.startswith("Opening your market dashboard.")
+    r = friday.handle("Friday, read it.").text
+    assert r.startswith("Your dashboard is tracking 196 events from 239 articles. The top market events: OPEC")
+    assert "Most pressure in the last day: Brent crude upward" in r
+    assert friday.handle("read the dashboard").text == r
     assert friday.handle("what's moving the markets").text == (
         "The top market events: OPEC agrees surprise output cut. It could push Brent crude up, Airline stocks down."
         " Next, Fed signals another hike.")

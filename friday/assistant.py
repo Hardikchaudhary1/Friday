@@ -121,6 +121,9 @@ R_SET_CITY = _rx(r"^(my city is|i live in|i'm in|i am in|set my (city|location) 
                  r"use) (.+?)( for (the )?weather)?$")
 R_DASHBOARD = _rx(r"^(open|show|show me|launch|bring up|pull up)( me)?( the| my)? (market |signal |markets )?"
                   r"dashboard$")
+R_READ_DASHBOARD = _rx(r"^(read|summari[sz]e|go through|tell me about)( me)?( the| my)? (market |signal )?dashboard$")
+R_READ_IT = _rx(r"^(read|read it|read it out|read it to me|read that|read this|summari[sz]e it|summari[sz]e that|"
+                r"what does it say|what's on it|what is on it|tell me what it says|go through it)$")
 R_MARKET_EVENTS = _rx(r"\b(what'?s|what is|what are) (moving|driving) (the )?markets?\b|\b(top|biggest|main) market "
                       r"(events|news|stories|movers)\b|\bmarket events\b")
 R_MARKET_RISK = _rx(r"\b(market risk|risk (view|summary|overview)|which assets are under pressure|"
@@ -156,6 +159,7 @@ class Assistant:
         self.on_thinking = None            # called before a slow Claude answer
         self.last_search: tuple[str, str] | None = None   # for "play that song"
         self.signal_api = None       # tests replace the Signal connection
+        self.context: str | None = None   # what Friday last showed you, for "read it"
         self.weather_lookup = None   # tests replace the live geocoder and forecast
         self.weather_report = None
         self.window_lister = None          # tests replace the live window list
@@ -204,6 +208,8 @@ class Assistant:
             (R_REMINDERS, lambda m: self._list_reminders()),
             (R_EVENT, self._event),   # before R_SCHEDULE: "put X in my calendar" adds, it doesn't ask
             (R_SCHEDULE, lambda m: self._schedule(text)),
+            (R_READ_DASHBOARD, lambda m: self._read_dashboard()),
+            (R_READ_IT, lambda m: self._read_it()),
             (R_DASHBOARD, lambda m: self._dashboard()),
             (R_MARKET_EVENTS, lambda m: self._market_events()),
             (R_MARKET_RISK, lambda m: self._market_risk()),
@@ -361,7 +367,29 @@ class Assistant:
             return Reply("I couldn't start the market dashboard. Check that the Signal project is installed.")
         if not self.dry_run:
             webbrowser.open(self._signal().base_url(self.cfg) + "/")
-        return Reply("Opening your market dashboard.")
+        self.context = "dashboard"
+        return Reply("Opening your market dashboard. Say read it if you'd like me to go through it.")
+
+    def _read_it(self) -> Reply:
+        """'Read it' refers to whatever Friday last showed you."""
+        if self.context == "dashboard":
+            return self._read_dashboard()
+        return Reply("Read what? I can read your dashboard, your tasks, your reminders or your schedule.")
+
+    def _read_dashboard(self) -> Reply:
+        """A spoken version of the dashboard: how much is tracked, top events, and where the pressure is."""
+        if not self._signal_up():
+            return Reply("The market dashboard isn't running right now.")
+        link = self._signal()
+        try:
+            st = link.status(self.cfg)
+        except (OSError, ValueError, AttributeError):
+            st = {}
+        events = self._market_events().text
+        risk = self._market_risk().text
+        head = (f"Your dashboard is tracking {st['stories']} events from {st['articles']} articles. "
+                if st.get("stories") else "")
+        return Reply(head + events + " " + risk)
 
     def _market_events(self) -> Reply:
         if not self._signal_up():

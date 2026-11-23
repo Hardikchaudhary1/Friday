@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -36,6 +37,7 @@ class BriefingData:
     quotes: list[Quote]
     tasks: list[Task]
     feed_errors: list[str] = field(default_factory=list)
+    signal_events: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -46,14 +48,30 @@ class Briefing:
     notes: list[str] = field(default_factory=list)
 
 
+def fetch_signal_events(cfg) -> tuple[list[dict], str | None]:
+    """Top events from a running Signal service; empty if it is off or unreachable."""
+    if not cfg.get("signal.enabled", False):
+        return [], None
+    url = cfg.get("signal.url", "http://127.0.0.1:8765").rstrip("/") + "/v1/briefing?limit=8"
+    try:
+        with urllib.request.urlopen(url, timeout=4) as resp:
+            return json.loads(resp.read().decode("utf-8")).get("events", []), None
+    except (OSError, ValueError) as exc:
+        return [], f"Signal unavailable ({exc})"
+
+
 def gather(cfg) -> BriefingData:
     store = TaskStore(cfg.data_dir / "friday.db")
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         news_f = pool.submit(fetch_headlines, cfg.get("feeds", []))
         quotes_f = pool.submit(fetch_quotes, cfg.get("markets", []))
+        signal_f = pool.submit(fetch_signal_events, cfg)
         headlines, errors = news_f.result()
         quotes = quotes_f.result()
-    return BriefingData(date.today(), headlines, quotes, store.for_today(), errors)
+        events, signal_err = signal_f.result()
+    if signal_err:
+        errors.append(signal_err)
+    return BriefingData(date.today(), headlines, quotes, store.for_today(), errors, events)
 
 
 def _part_of_day(now: datetime) -> str:
@@ -80,6 +98,16 @@ def build_prompt(cfg, data: BriefingData, now: datetime | None = None) -> str:
         + (f" | {h.summary[:200]}" if h.summary and h.summary not in h.title else "")
         for i, h in enumerate(top, 1)
     )
+    signal_block = ""
+    if data.signal_events:
+        signal_block = "\n\nSTRUCTURED MARKET EVENTS (from the Signal engine; clustered across outlets, with expected market reactions)\n" + "\n".join(
+            f"{i}. [{e.get('type')}, severity {e.get('severity')}/5, {e.get('sources')} sources, "
+            f"{', '.join(e.get('regions', [])[:2]) or 'global'}] {e.get('title')}"
+            + (f" | {e['summary']}" if e.get("summary") else "")
+            + (f" | expected: {'; '.join(e.get('impacts', []))}" if e.get("impacts") else "")
+            for i, e in enumerate(data.signal_events, 1)
+        ) + "\nPrefer these events for the news section; the expected reactions are model estimates, so say \"could\" or \"tends to\"."
+
     task_lines = "\n".join(
         f"- {t.text}" + (f" (due {t.due_label(data.today)})" if t.due else "")
         for t in data.tasks
@@ -94,7 +122,7 @@ MARKET SNAPSHOT (daily change vs previous close; dates differ because markets cl
 {market_lines}
 
 NEWS HEADLINES (ranked by a keyword score for likely market impact; higher first)
-{news_lines}
+{news_lines}{signal_block}
 
 MY TASKS FOR TODAY (overdue, due today, or undated)
 {task_lines}
@@ -118,7 +146,14 @@ def template_briefing(cfg, data: BriefingData, now: datetime | None = None) -> s
     if movers:
         parts.append("Biggest market moves: " + "; ".join(format_quote(q) for q in movers) + ".")
     top = select_top(data.headlines, 5, per_source=2)
-    if top:
+    if data.signal_events:
+        parts.append("Top market-moving events.")
+        for e in data.signal_events[:5]:
+            line = f"{e['title'].rstrip('.')}."
+            if e.get("impacts"):
+                line += " Could mean " + ", ".join(i.split(" (")[0] for i in e["impacts"][:3]) + "."
+            parts.append(line)
+    elif top:
         parts.append("Top market-moving headlines.")
         parts.extend(f"From {h.source}: {h.title.rstrip('.')}." for h in top)
     if data.tasks:

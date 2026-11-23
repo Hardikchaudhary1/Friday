@@ -20,6 +20,12 @@ voice:
   edge_voice: "en-GB-SoniaNeural"
   rate: "+5%"
 
+# Signal (companion project): clustered market events with expected reactions.
+# Friday uses it when it is running and falls back to raw headlines when it is not.
+signal:
+  enabled: true
+  url: "http://127.0.0.1:8765"
+
 briefing:
   max_headlines_for_llm: 30
   target_words: 320
@@ -54,5 +60,5 @@ feeds:
   - { name: "CNBC Markets",   url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069" }
   - { name: "MarketWatch",    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" }
   - { name: "Google News: geopolitics + markets", url: "https://news.google.com/rss/search?q=geopolitics+markets+when:1d&hl=en-US&gl=US&ceid=US:en" }
-  - { name: "Google News: energy + trade", url: "https://news.google.com/rss/search?q=(oil+OR+OPEC+OR+tariffs+OR+sanctions+OR+%22export+controls%22)+when:1d&hl=en-US&gl=US&ceid=US:en" }
+  - { name: "Google News: energy + trade", url: "https://news.google.com/rss/search?q=oil+OR+OPEC+OR+tariffs+OR+sanctions+when:1d&hl=en-US&gl=US&ceid=US:en" }
   - { name: "Google News: central banks", url: "https://news.google.com/rss/search?q=(Fed+OR+ECB+OR+%22Bank+of+Japan%22+OR+PBOC)+rates+when:1d&hl=en-US&gl=US&ceid=US:en" }

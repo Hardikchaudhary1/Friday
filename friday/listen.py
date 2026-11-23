@@ -18,7 +18,8 @@ SAMPLE_RATE = 16000
 BLOCK = 1600                      # 0.1 s of audio per block: quicker wake-word and end-of-speech detection
 VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
 VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
-WHISPER_HINT = "Friday, open, remind me, tomorrow, calendar, event, task, briefing, search for."
+WHISPER_HINT = ("Friday, play, pause, next, skip, previous, resume, volume, mute, open, close, switch to, "
+                "remind me, tomorrow, calendar, event, task, briefing, search for.")
 # Vosk is limited to a small vocabulary so it stays cheap; without other words to choose
 # from it would label any speech "friday". These decoys soak up everything else.
 DECOY_WORDS = ["monday", "today", "fried", "free", "right", "five", "the", "what", "is", "it", "a", "and",

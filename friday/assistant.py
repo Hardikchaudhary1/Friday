@@ -81,6 +81,13 @@ R_VOL_STEP = _rx(r"^(turn (it|the volume|the music) (up|down)|volume (up|down)|(
 R_MUTE = _rx(r"^(mute|unmute)( the)?( sound| audio| volume| music| it)?$")
 R_WHAT_VOL = _rx(r"^what('s| is) the volume$")
 R_PLAY_ON = _rx(r"^play (.+?) on (youtube|spotify)$")
+R_SPOTIFY_PLAY = _rx(r"^(play|start|resume|put on) (spotify|music on spotify|something on spotify)$")
+GENERIC_MUSIC = _rx(r"^(something|anything|music|some music|my music|songs|some songs|a song|my songs|"
+                    r"my playlist|a playlist|my liked songs|liked songs)$")
+# Single-word commands Whisper often mishears when said alone.
+MISHEARD = {"late": "play", "plate": "play", "played": "play", "lay": "play", "pay": "play",
+            "paws": "pause", "pours": "pause", "pose": "pause", "pause it": "pause", "posts": "pause",
+            "necks": "next", "nexed": "next", "text": "next", "skipped": "skip", "scape": "skip"}
 R_PLAY_ANY = _rx(r"^play (.+)$")
 R_SEARCH_ON = _rx(r"^(search|look up|find|look for)( for)? (.+?) on (youtube|google|amazon|github|wikipedia|reddit|"
                   r"linkedin|spotify|netflix|twitter|x|maps|google maps|news|images|tradingview)$")
@@ -125,6 +132,7 @@ class Assistant:
         text = normalise_speech(raw)
         if not text:
             return Reply("Yes?")
+        text = MISHEARD.get(text.lower(), text)
 
         if self.pending:
             pending, self.pending = self.pending, None
@@ -133,6 +141,7 @@ class Assistant:
 
         for pattern, handler in (
             # Media first: these are short and said mid-task, so they must be quick and silent.
+            (R_SPOTIFY_PLAY, lambda m: self._spotify_play()),
             (R_PAUSE, lambda m: self._media("play_pause")),
             (R_NEXT, lambda m: self._media("next")),
             (R_PREV, lambda m: self._media("previous")),
@@ -253,11 +262,30 @@ class Assistant:
         from . import media
         what = re.sub(r"^(the song|the video|song|video|some)\s+", "", what.strip(), flags=re.I)
         where = where or self.cfg.get("media.default_player", "youtube")
+        if where == "spotify" and GENERIC_MUSIC.match(what):
+            return self._spotify_play()
         if where == "spotify":
             media.search_site("spotify", what, self.dry_run)
             return Reply(f"Searching Spotify for {what}.")
         found, _ = media.play_on_youtube(what, self.dry_run) if not self.dry_run else (True, "")
         return Reply(f"Playing {what} on YouTube." if found else f"Here are the YouTube results for {what}.")
+
+    def _spotify_play(self) -> Reply:
+        """'Play music on Spotify': resume Spotify, opening it first if it isn't running."""
+        from . import media
+        running = any(w["name"].lower() == "spotify" for w in (self._windows() or
+                                                                 ([] if self.dry_run else media.running_windows())))
+        if running:
+            media.press("play_pause", self.dry_run)
+            return Reply("", data={"media": "play_pause"})
+        result = open_target("spotify", self.apps, dry_run=self.dry_run)
+        if not result.ok:
+            return Reply("Spotify doesn't seem to be installed.")
+        if not self.dry_run:
+            # Give Spotify a few seconds to start, then press play (it resumes your last track).
+            import threading
+            threading.Timer(6.0, media.press, args=("play_pause",)).start()
+        return Reply("Opening Spotify and starting your music.")
 
     def _search_site(self, site: str, query: str) -> Reply:
         from . import media

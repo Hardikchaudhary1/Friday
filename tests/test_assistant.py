@@ -268,6 +268,22 @@ def test_site_search_urls():
     assert search_site("maps", "coffee near me", dry_run=True) == "https://www.google.com/maps/search/coffee%20near%20me"
 
 
+def test_generic_spotify_requests_play_instead_of_searching(friday):
+    friday.window_lister = lambda: [{"pid": 1, "name": "Spotify", "title": "Spotify Premium"}]
+    for said in ("play music on spotify", "play something on spotify", "play spotify", "play my playlist on spotify"):
+        r = friday.handle(f"Friday, {said}.")
+        assert r.data == {"media": "play_pause"}, said
+    friday.window_lister = lambda: []
+    assert friday.handle("play music on spotify").text == "Opening Spotify and starting your music."
+    assert friday.handle("play blinding lights on spotify").text == "Searching Spotify for blinding lights."
+
+
+@pytest.mark.parametrize("heard, key", [("Friday, late.", "play_pause"), ("Friday, paws.", "play_pause"),
+                                         ("Friday, necks.", "next")])
+def test_common_mishearings(friday, heard, key):
+    assert friday.handle(heard).data == {"media": key}
+
+
 # ---- clearing in bulk ---------------------------------------------------------------
 
 def test_remove_my_schedules_asks_then_clears(friday):

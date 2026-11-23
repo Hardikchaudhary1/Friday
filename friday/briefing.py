@@ -76,11 +76,29 @@ def gather(cfg) -> BriefingData:
     return BriefingData(date.today(), headlines, quotes, store.for_today(), errors, events, todays_agenda(cfg))
 
 
+def todays_weather(cfg) -> str | None:
+    """Today's weather for the city Friday remembered (asked the first time you ask for weather)."""
+    try:
+        prefs = json.loads((cfg.data_dir / "prefs.json").read_text(encoding="utf-8"))
+        c = prefs["city"]
+    except (OSError, ValueError, KeyError):
+        return None
+    from . import weather
+    try:
+        return weather.weather_report(weather.Place(c["name"], c.get("country", ""), c["lat"], c["lon"]))
+    except Exception:
+        return None
+
+
 def todays_agenda(cfg) -> list[str]:
     from .schedule import ScheduleStore
     sched = ScheduleStore(cfg.data_dir / "friday.db")
     today = date.today()
-    items = [f"Event: {e.spoken(today)}" for e in sched.events_between(today, today)]
+    items = []
+    w = todays_weather(cfg)
+    if w:
+        items.append(f"Weather: {w}")
+    items += [f"Event: {e.spoken(today)}" for e in sched.events_between(today, today)]
     end_of_day = datetime.combine(today, datetime.max.time())
     items += [f"Reminder at {r.due_at:%H:%M}: {r.text}" for r in sched.pending_reminders(end_of_day)
               if r.event_id is None]
@@ -141,14 +159,14 @@ NEWS HEADLINES (ranked by a keyword score for likely market impact; higher first
 MY TASKS FOR TODAY (overdue, due today, or undated)
 {task_lines}
 
-MY CALENDAR AND REMINDERS TODAY
+MY WEATHER, CALENDAR AND REMINDERS TODAY
 {agenda_lines}
 
 Structure, about {words} words in total:
 1. A one-line greeting with the day.
 2. Markets in two to four sentences: the overall mood, then the biggest moves worth knowing.
 3. The three to five themes from the news most likely to move global markets today, each with why it matters.
-4. My day: today's events and reminders with their times, then my tasks (how many, anything overdue,
+4. My day: the weather in one sentence if it is given, today's events and reminders with their times, then my tasks (how many, anything overdue,
    and a sensible order if it is obvious).
 5. One short closing line.
 """

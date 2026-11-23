@@ -345,6 +345,51 @@ def test_loose_next_previous(friday, heard, key):
     assert friday.handle(heard).data == {"media": key}
 
 
+# ---- weather and browsers ------------------------------------------------------------
+
+@pytest.fixture
+def weather_friday(friday):
+    from friday.weather import Place
+    places = {"london": Place("London", "United Kingdom", 51.5, -0.1), "new york": Place("New York", "United States", 40.7, -74.0)}
+    friday.weather_lookup = lambda city: places.get(city.lower())
+    friday.weather_report = lambda place, day: f"{day} in {place.name}: sunny."
+    return friday
+
+
+def test_weather_asks_for_city_once_then_remembers(weather_friday):
+    f = weather_friday
+    assert f.handle("Friday, watch the weather today").text == "Which city are you in? I'll remember it for next time."
+    assert f.handle("London").text == "Got it, I'll use London. today in London: sunny."
+    assert f.handle("what's the weather tomorrow").text == "tomorrow in London: sunny."
+    assert f.handle("do I need an umbrella").text == "today in London: sunny."
+
+
+def test_weather_for_a_named_city_and_search_phrasing(weather_friday):
+    f = weather_friday
+    assert f.handle("what's the weather in New York today").text == "today in New York: sunny."
+    f.handle("my city is London")
+    assert f.handle("search for weather on Brave").text == "today in London: sunny."
+    assert f.handle("weather in atlantis").text == "I couldn't find a place called atlantis."
+
+
+def test_search_in_named_browser(friday):
+    r = friday.handle("Friday, search for mechanical keyboards on Brave.")
+    assert r.text in ("Searching mechanical keyboards in Brave.",
+                      "I couldn't find Brave, so I've searched mechanical keyboards in your default browser.")
+
+
+def test_weather_description():
+    from friday.weather import Place, describe
+    data = {"current": {"temperature_2m": 18.4, "apparent_temperature": 14.9, "weather_code": 61},
+            "daily": {"temperature_2m_max": [21.2, 19.0], "temperature_2m_min": [12.6, 11.0],
+                      "precipitation_probability_max": [70, 10], "weather_code": [63, 2]}}
+    p = Place("London", "UK", 0, 0)
+    assert describe(p, data) == ("Right now in London it's 18 degrees, feels like 15, with light rain. "
+                                 "Today: a high of 21 degrees and a low of 13 degrees with a 70 percent chance of rain.")
+    assert describe(p, data, "tomorrow") == ("Tomorrow in London: partly cloudy, a high of 19 degrees and a low "
+                                             "of 11 degrees, and rain is unlikely.")
+
+
 # ---- clearing in bulk ---------------------------------------------------------------
 
 def test_remove_my_schedules_asks_then_clears(friday):

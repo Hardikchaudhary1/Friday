@@ -6,6 +6,7 @@ Anything else goes to Claude for a short spoken answer, when Claude is available
 from __future__ import annotations
 
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
@@ -111,6 +112,13 @@ R_SEARCH_ON = _rx(r"^(search|look up|find|look for)( for)? (.+?) on (youtube|goo
                   r"linkedin|spotify|netflix|twitter|x|maps|google maps|news|images|tradingview)$")
 R_SEARCH_SITE_FIRST = _rx(r"^search (youtube|google|amazon|github|wikipedia|reddit|linkedin|spotify|netflix|maps|news)"
                           r" for (.+)$")
+_BROWSER = r"(brave|chrome|google chrome|edge|microsoft edge|firefox|opera)"
+R_SEARCH_BROWSER = _rx(rf"^(search|google|look up|find)( the web)?( for)? (.+?) (on|in|using|with) {_BROWSER}( browser)?$")
+R_WEATHER = _rx(r"\b(weather|forecast|temperature outside|is it (going to )?rain(ing)?|will it rain|"
+                r"do i need an umbrella|how (hot|cold) is it)\b")
+R_WEATHER_CITY = _rx(r"\b(?:in|for|at)\s+([a-z][a-z .'-]+?)(?:\s+(?:today|tomorrow|now|right now|this week))?$")
+R_SET_CITY = _rx(r"^(my city is|i live in|i'm in|i am in|set my (city|location) to|my location is|"
+                 r"use) (.+?)( for (the )?weather)?$")
 R_CLOSE = _rx(r"^(close|quit|exit|shut down|kill)\s+(.+)$")
 R_FOCUS = _rx(r"^(switch to|go to|focus( on)?|bring up|go back to)\s+(.+)$")
 R_BRIEF = _rx(r"\b(brief me|briefing|market (update|news|summary)|what('s| is) (happening|going on)|the news|headlines)\b")
@@ -141,6 +149,8 @@ class Assistant:
         self.pending: dict | None = None   # a follow-up question waiting for an answer
         self.on_thinking = None            # called before a slow Claude answer
         self.last_search: tuple[str, str] | None = None   # for "play that song"
+        self.weather_lookup = None   # tests replace the live geocoder and forecast
+        self.weather_report = None
         self.window_lister = None          # tests replace the live window list
         self.morning_hour = int(cfg.get("reminders.morning_hour", 9))
         self.before_minutes = int(cfg.get("reminders.before_minutes", 30))
@@ -192,6 +202,9 @@ class Assistant:
             (R_OPEN, lambda m: self._open(m.group(3))),
             (R_PLAY_ON, lambda m: self._play(m.group(1), m.group(3).lower())),
             (R_PLAY_ANY, lambda m: self._play(m.group(1), None)),
+            (R_SET_CITY, lambda m: self._set_city(m.group(3))),
+            (R_WEATHER, lambda m: self._weather(text)),
+            (R_SEARCH_BROWSER, lambda m: self._search_in_browser(m.group(4), m.group(6))),
             (R_SEARCH_ON, lambda m: self._search_site(m.group(4), m.group(3))),
             (R_SEARCH_SITE_FIRST, lambda m: self._search_site(m.group(1), m.group(2))),
             (R_SEARCH, lambda m: Reply(web_search(m.group(5), self.dry_run).message)),
@@ -226,6 +239,9 @@ class Assistant:
             return self._remind_text(text)
         if pending["kind"] == "event_date":
             return self._event_text(f"{pending['title']} {text}")
+        if pending["kind"] == "weather_city":
+            city = re.sub(r"^(it's|it is|i'm in|i am in|i live in|in)\s+", "", text, flags=re.I)
+            return self._set_city(city, then_report=pending.get("day", "today"))
         if pending["kind"] == "clear_confirm":
             if R_YES.match(text):
                 return self._do_clear(pending["what"], pending["day"])
@@ -314,6 +330,77 @@ class Assistant:
             import threading
             threading.Timer(6.0, media.press, args=("play_pause",)).start()
         return Reply("Opening Spotify and starting your music.")
+
+    # ---- weather and browsers ----------------------------------------------------
+
+    def _prefs_path(self):
+        return self.cfg.data_dir / "prefs.json"
+
+    def _load_prefs(self) -> dict:
+        import json
+        try:
+            return json.loads(self._prefs_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _save_prefs(self, prefs: dict) -> None:
+        import json
+        self._prefs_path().write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+
+    def _set_city(self, city: str, then_report: str | None = None) -> Reply:
+        from . import weather
+        try:
+            place = self.weather_lookup(city) if self.weather_lookup else weather.find_place(city)
+        except OSError:
+            return Reply("I can't reach the weather service right now.")
+        if not place:
+            return self._ask("weather_city", f"I couldn't find {city}. Which city should I use?", day=then_report)
+        prefs = self._load_prefs()
+        prefs["city"] = {"name": place.name, "country": place.country, "lat": place.lat, "lon": place.lon}
+        self._save_prefs(prefs)
+        if then_report:
+            return self._weather_for(place, then_report, prefix=f"Got it, I'll use {place.name}. ")
+        return Reply(f"Okay, I'll use {place.name}, {place.country} for the weather.")
+
+    def _weather(self, text: str) -> Reply:
+        from . import weather
+        day = "tomorrow" if re.search(r"\btomorrow\b", text, re.I) else "today"
+        # Drop "search for ... on Brave" wrapping so only a real place name is left.
+        cleaned = re.sub(rf"\s+(on|in|using|with) {_BROWSER}( browser)?$", "", text, flags=re.I)
+        cleaned = re.sub(r"^(search|google|look up|find)( the web)?( for)?\s+", "", cleaned, flags=re.I)
+        m = R_WEATHER_CITY.search(cleaned)
+        city = m.group(1).strip() if m else None
+        if city and (re.search(r"\b(weather|forecast|today|tomorrow|now|week|morning|evening|afternoon)\b", city, re.I)
+                     or city.lower() in ("here", "my city", "my area")):
+            city = None
+        try:
+            if city:
+                place = self.weather_lookup(city) if self.weather_lookup else weather.find_place(city)
+                if not place:
+                    return Reply(f"I couldn't find a place called {city}.")
+            else:
+                saved = self._load_prefs().get("city")
+                if not saved:
+                    return self._ask("weather_city", "Which city are you in? I'll remember it for next time.", day=day)
+                place = weather.Place(saved["name"], saved.get("country", ""), saved["lat"], saved["lon"])
+            return self._weather_for(place, day)
+        except OSError:
+            return Reply("I can't reach the weather service right now.")
+
+    def _weather_for(self, place, day: str, prefix: str = "") -> Reply:
+        from . import weather
+        report = self.weather_report(place, day) if self.weather_report else weather.weather_report(place, day)
+        return Reply(prefix + report)
+
+    def _search_in_browser(self, query: str, browser: str) -> Reply:
+        from . import media
+        if re.fullmatch(r"(the )?(weather|forecast)( today| tomorrow)?", query.strip(), re.I):
+            return self._weather(query)
+        url = "https://www.google.com/search?q=" + urllib.parse.quote_plus(query)
+        used = media.open_in_browser(browser, url, self.dry_run)
+        name = browser.title()
+        return Reply(f"Searching {query} in {name}." if used else
+                     f"I couldn't find {name}, so I've searched {query} in your default browser.")
 
     def _spotify_song(self, what: str) -> Reply:
         """Plays a specific song: Spotify's search, then its Play button (see spotify.py)."""

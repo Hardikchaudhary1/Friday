@@ -150,6 +150,40 @@ def search_site(site: str, query: str, dry_run: bool = False) -> str:
     return url
 
 
+BROWSERS = {"brave": "brave.exe", "chrome": "chrome.exe", "google chrome": "chrome.exe", "edge": "msedge.exe",
+            "microsoft edge": "msedge.exe", "firefox": "firefox.exe", "opera": "opera.exe"}
+
+
+def browser_path(name: str) -> str | None:
+    """The browser's exe, from Windows' App Paths registry (how 'Run' finds programs)."""
+    import winreg
+    exe = BROWSERS.get(name.lower())
+    if not exe:
+        return None
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as key:
+                path = winreg.QueryValue(key, None)
+                if path and os.path.exists(path.strip('"')):
+                    return path.strip('"')
+        except OSError:
+            continue
+    return None
+
+
+def open_in_browser(browser: str, url: str, dry_run: bool = False) -> bool:
+    """Opens url in a specific browser; falls back to the default browser. Returns True if it was that browser."""
+    path = browser_path(browser)
+    if dry_run:
+        return path is not None
+    if path:
+        import subprocess
+        subprocess.Popen([path, url])
+        return True
+    webbrowser.open(url)
+    return False
+
+
 def youtube_first_video(query: str, timeout: float = 6) -> str | None:
     """The top search result's video id, read from YouTube's results page (no API key needed)."""
     url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)

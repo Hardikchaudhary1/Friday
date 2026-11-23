@@ -1,0 +1,58 @@
+# Copy this file to config.yaml and edit it. config.yaml is git-ignored.
+
+user_name: "Boss"
+
+# Which language model writes the briefing. Friday tries each backend in order
+# and uses the first that works:
+#   claude_cli    - the Claude Code CLI, billed to your Claude subscription
+#   anthropic_api - the Anthropic API; needs ANTHROPIC_API_KEY (pay-as-you-go)
+#   template      - no AI; a plain read-out of the data (always works)
+llm:
+  order: [claude_cli, anthropic_api, template]
+  claude_cli_path: ""          # empty = find it automatically
+  claude_cli_model: ""         # empty = your subscription's default model
+  api_model: "claude-opus-5-5"
+  timeout_seconds: 180
+
+voice:
+  enabled: true
+  engine: edge               # edge (natural, needs internet) or sapi (offline Windows voice)
+  edge_voice: "en-GB-SoniaNeural"
+  rate: "+5%"
+
+briefing:
+  max_headlines_for_llm: 30
+  target_words: 320
+  once_per_day: true         # the startup run skips if today's briefing already played
+
+# Global market snapshot. Symbols are Yahoo Finance tickers.
+markets:
+  - { symbol: "^GSPC",     name: "S&P 500",       group: "Equities" }
+  - { symbol: "^IXIC",     name: "Nasdaq",        group: "Equities" }
+  - { symbol: "^STOXX50E", name: "Euro Stoxx 50", group: "Equities" }
+  - { symbol: "^FTSE",     name: "FTSE 100",      group: "Equities" }
+  - { symbol: "^N225",     name: "Nikkei 225",    group: "Equities" }
+  - { symbol: "^HSI",      name: "Hang Seng",     group: "Equities" }
+  - { symbol: "000001.SS", name: "Shanghai Comp", group: "Equities" }
+  - { symbol: "^NSEI",     name: "Nifty 50",      group: "Equities" }
+  - { symbol: "^VIX",      name: "VIX",           group: "Risk" }
+  - { symbol: "^TNX",      name: "US 10Y yield",  group: "Rates" }
+  - { symbol: "DX-Y.NYB",  name: "Dollar index",  group: "FX" }
+  - { symbol: "EURUSD=X",  name: "EUR/USD",       group: "FX" }
+  - { symbol: "JPY=X",     name: "USD/JPY",       group: "FX" }
+  - { symbol: "BZ=F",      name: "Brent crude",   group: "Commodities" }
+  - { symbol: "GC=F",      name: "Gold",          group: "Commodities" }
+  - { symbol: "HG=F",      name: "Copper",        group: "Commodities" }
+  - { symbol: "BTC-USD",   name: "Bitcoin",       group: "Crypto" }
+
+# News sources (RSS). Geopolitics, macro and markets.
+feeds:
+  - { name: "BBC World",      url: "https://feeds.bbci.co.uk/news/world/rss.xml" }
+  - { name: "Guardian Business", url: "https://www.theguardian.com/business/rss" }
+  - { name: "Al Jazeera",     url: "https://www.aljazeera.com/xml/rss/all.xml" }
+  - { name: "CNBC World",     url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362" }
+  - { name: "CNBC Markets",   url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069" }
+  - { name: "MarketWatch",    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories" }
+  - { name: "Google News: geopolitics + markets", url: "https://news.google.com/rss/search?q=geopolitics+markets+when:1d&hl=en-US&gl=US&ceid=US:en" }
+  - { name: "Google News: energy + trade", url: "https://news.google.com/rss/search?q=(oil+OR+OPEC+OR+tariffs+OR+sanctions+OR+%22export+controls%22)+when:1d&hl=en-US&gl=US&ceid=US:en" }
+  - { name: "Google News: central banks", url: "https://news.google.com/rss/search?q=(Fed+OR+ECB+OR+%22Bank+of+Japan%22+OR+PBOC)+rates+when:1d&hl=en-US&gl=US&ceid=US:en" }

@@ -1,0 +1,29 @@
+[project]
+name = "friday"
+version = "0.1.0"
+description = "A voice assistant for Windows that speaks a global-markets and geopolitics briefing plus your tasks when you log in."
+requires-python = ">=3.11"
+dependencies = [
+    "feedparser>=6.0",
+    "yfinance>=0.2",
+    "edge-tts>=7.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "anthropic>=0.70",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+friday = "friday.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["friday"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

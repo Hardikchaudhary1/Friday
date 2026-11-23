@@ -62,6 +62,10 @@ R_EVENT = _rx(r"^(please )?(add|create|schedule|put|set up|book)\s+(an?\s+)?(eve
 R_CALENDAR_SUFFIX = _rx(r"\s+(to|in|on|into)\s+(my|the)\s+(calendar|schedule|agenda)\b")
 R_SCHEDULE = _rx(r"\b(what('s| is)|show|read|tell me)( me)? (on )?my (schedule|calendar|agenda|day)\b|\bwhat do i have (on )?(today|tomorrow|this week)\b|\bany (events|meetings|appointments)\b|\bmy (schedule|calendar|agenda)\b")
 R_REMINDERS = _rx(r"\b(what are|list|show|read)( me)? my reminders\b|\bupcoming reminders\b|\bany reminders\b")
+R_CLEAR = _rx(r"^(remove|delete|clear|cancel|wipe|erase)( out)?( all)?( of)?( my| the)?\s+"
+              r"(schedules?|calendar|events|appointments|meetings|reminders|tasks|to-?dos?|to-?do list|everything)"
+              r"( for (today|tomorrow))?$")
+R_YES = _rx(r"^(yes|yeah|yep|sure|confirm|do it|go ahead|ok|okay)\b")
 R_CANCEL_REMINDER = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(last\s+)?reminder(\s+(to|about|for)\s+(.+))?$")
 R_CANCEL_EVENT = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(event|meeting|appointment)\s+(.+)$")
 # ---- media, volume, sites, windows ----
@@ -141,6 +145,7 @@ class Assistant:
             (R_THANKS, lambda m: Reply("You're welcome.")),
             (R_HELP, lambda m: Reply(HELP)),
             (R_LOGIN, lambda m: self._login()),
+            (R_CLEAR, self._clear),
             (R_CANCEL_REMINDER, self._cancel_reminder),
             (R_CANCEL_EVENT, self._cancel_event),
             (R_REMIND, self._remind),
@@ -188,6 +193,10 @@ class Assistant:
             return self._remind_text(text)
         if pending["kind"] == "event_date":
             return self._event_text(f"{pending['title']} {text}")
+        if pending["kind"] == "clear_confirm":
+            if R_YES.match(text):
+                return self._do_clear(pending["what"], pending["day"])
+            return Reply("Okay, I've left everything as it is.")
         if pending["kind"] == "open_name":
             return self._open(re.sub(r"^(open|launch|start)\s+", "", text, flags=re.I))
         if pending["kind"] == "open_confirm" and re.match(r"^(yes|yeah|yep|sure|ok|okay|please|do it)\b", text, re.I):
@@ -379,6 +388,57 @@ class Assistant:
             tail = ""
         return Reply(f"Added {title} {when}.{tail}", data={"event_id": event.id})
 
+    # ---- clearing in bulk (always confirmed) ------------------------------------
+
+    def _clear_targets(self, what: str, day: str | None):
+        today = self.now().date()
+        if day == "today":
+            start = end = today
+        elif day == "tomorrow":
+            start = end = today + timedelta(days=1)
+        else:
+            start, end = today - timedelta(days=3650), today + timedelta(days=3650)
+        events = self.schedule.events_between(start, end) if what in ("events", "everything") else []
+        reminders = []
+        if what in ("reminders", "everything"):
+            reminders = [r for r in self.schedule.pending_reminders()
+                         if r.event_id is None and (day is None or start <= r.due_at.date() <= end)]
+        tasks = self.tasks.open_tasks() if what in ("tasks", "everything") and day is None else []
+        return events, reminders, tasks
+
+    @staticmethod
+    def _clear_kind(word: str) -> str:
+        word = word.lower()
+        if word.startswith(("schedule", "calendar", "event", "appointment", "meeting")):
+            return "events"
+        if word.startswith("reminder"):
+            return "reminders"
+        if word.startswith(("task", "to")):
+            return "tasks"
+        return "everything"
+
+    def _clear(self, m: re.Match) -> Reply:
+        what, day = self._clear_kind(m.group(6)), (m.group(8) or "").lower() or None
+        events, reminders, tasks = self._clear_targets(what, day)
+        parts = [f"{n} {label}{'s' if n != 1 else ''}" for n, label in
+                 ((len(events), "event"), (len(reminders), "reminder"), (len(tasks), "task")) if n]
+        if not parts:
+            return Reply("There's nothing to remove.")
+        listing = " and ".join(parts) if len(parts) <= 2 else ", ".join(parts[:-1]) + " and " + parts[-1]
+        return self._ask("clear_confirm", f"Delete {listing}{' for ' + day if day else ''}? Say yes to confirm.",
+                         what=what, day=day)
+
+    def _do_clear(self, what: str, day: str | None) -> Reply:
+        events, reminders, tasks = self._clear_targets(what, day)
+        for e in events:
+            self.schedule.delete_event(e.id)       # its reminders go with it
+        for r in reminders:
+            self.schedule.cancel_reminder(r.id)
+        for t in tasks:
+            self.tasks.remove(t.id)
+        return Reply(f"Done. Removed {len(events) + len(reminders) + len(tasks)} item"
+                     f"{'s' if len(events) + len(reminders) + len(tasks) != 1 else ''}.")
+
     def _cancel_event(self, m: re.Match) -> Reply:
         today = self.now().date()
         events = self.schedule.events_between(today, today + timedelta(days=366))
@@ -449,9 +509,17 @@ class Assistant:
         backends = self.llm_backends if self.llm_backends is not None else build_backends(self.cfg, purpose="chat")
         now = self.now()
         system = (
-            "You are Friday, a concise voice assistant. Your answer is spoken aloud: plain sentences, no markdown, "
-            "no lists, at most three short sentences. If you are unsure or the question needs live data you don't "
-            f"have, say so briefly. Current local time: {now:%A %d %B %Y %H:%M}."
+            "You are the conversational part of Friday, a voice assistant on the user's Windows laptop. Your answer "
+            "is spoken aloud: plain sentences, no markdown, no lists, at most three short sentences. If you are "
+            "unsure or the question needs live data you don't have, say so briefly.\n"
+            "Friday handles actions itself through fixed phrases; you only get requests those phrases did not match. "
+            "If the user seems to want one of these actions, tell them the exact phrase to say instead of saying it "
+            "can't be done: 'open Spotify', 'close Spotify', 'switch to Brave', 'pause', 'next song', "
+            "'set volume to 40', 'play lofi on YouTube', 'search X on Amazon', 'remind me to X tomorrow at 5 pm', "
+            "'what are my reminders', 'cancel the reminder about X', 'add dentist on 5 December at 4 pm', "
+            "'what's on my schedule tomorrow', 'cancel the event X', 'delete all my events', 'delete all my "
+            "reminders', 'add task X', 'what are my tasks', 'mark X as done', 'brief me'.\n"
+            f"Current local time: {now:%A %d %B %Y %H:%M}."
         )
         announced = False
         for backend in backends:

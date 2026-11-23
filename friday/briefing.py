@@ -217,6 +217,46 @@ def write_briefing(cfg, data: BriefingData, log=lambda msg: None) -> Briefing:
     return Briefing(template_briefing(cfg, data), "template", data, notes)
 
 
+def write_briefing_streaming(cfg, data: BriefingData, on_part, log=lambda msg: None) -> Briefing:
+    """Like write_briefing, but calls on_part(text) for each paragraph as soon as Claude has
+    written it, so Friday can start speaking after the first paragraph instead of the last."""
+    prompt = build_prompt(cfg, data)
+    notes: list[str] = []
+    for backend in build_backends(cfg):
+        if not backend.available():
+            notes.append(f"{backend.name}: not available")
+            continue
+        log(f"Writing briefing with {backend.name}...")
+        full, buffer, spoken_any = [], "", False
+        try:
+            for piece in backend.stream(SYSTEM_PROMPT, prompt):
+                full.append(piece)
+                buffer += piece
+                # Hand over every finished paragraph; long paragraphs are split at a sentence end.
+                while True:
+                    cut = buffer.find("\n\n")
+                    if cut == -1 and len(buffer) > 400:
+                        m = list(re.finditer(r"[.!?]\s", buffer[:400]))
+                        cut = m[-1].end() if m else -1
+                    if cut == -1:
+                        break
+                    part, buffer = buffer[:cut].strip(), buffer[cut:].lstrip()
+                    if part:
+                        on_part(part)
+                        spoken_any = True
+            if buffer.strip():
+                on_part(buffer.strip())
+            return Briefing("".join(full).strip(), backend.name, data, notes)
+        except LLMError as exc:
+            notes.append(f"{backend.name}: {exc}")
+            log(f"{backend.name} failed: {exc}")
+            if spoken_any:  # part of it was already read out; don't start over with another backend
+                return Briefing("".join(full).strip(), backend.name, data, notes)
+    text = template_briefing(cfg, data)
+    on_part(text)
+    return Briefing(text, "template", data, notes)
+
+
 # ---- once-per-day bookkeeping and archive -------------------------------------
 
 def _state_path(cfg):

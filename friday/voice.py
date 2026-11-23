@@ -121,9 +121,30 @@ def speak_edge(text: str, voice: str = "en-GB-SoniaNeural", rate: str = "+0%",
     audio = _play_mp3_chunks(chunks(), stop_event)
     complete = stop_event is None or not stop_event.is_set()
     if complete and audio and len(text) <= 120:  # cache short, likely-repeated replies
+        _write_cache(cached, audio)
+
+
+def _write_cache(path: Path, data: bytes) -> None:
+    """Writes atomically, so a reader never plays a half-written file."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{threading.get_ident()}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def clean_cache(max_age_days: int = 7) -> None:
+    """Removes cached long phrases (briefing paragraphs) after a week; short ones are tiny and kept."""
+    import time as _time
+    if not CACHE_DIR.exists():
+        return
+    cutoff = _time.time() - max_age_days * 86400
+    for f in CACHE_DIR.iterdir():
         try:
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cached.write_bytes(audio)
+            if f.suffix == ".tmp" or (f.stat().st_size > 60_000 and f.stat().st_mtime < cutoff):
+                f.unlink()
         except OSError:
             pass
 
@@ -141,11 +162,8 @@ def prewarm(phrases: list[str], voice: str, rate: str) -> None:
             if isinstance(item, Exception):
                 return
             data += item
-        try:
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(bytes(data))
-        except OSError:
-            return
+        if data:
+            _write_cache(path, bytes(data))
 
 
 def speak_sapi(text: str) -> None:

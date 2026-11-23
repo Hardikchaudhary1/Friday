@@ -10,7 +10,7 @@ user_name: "Boss"
 llm:
   order: [claude_cli, anthropic_api, template]
   claude_cli_path: ""          # empty = find it automatically
-  claude_cli_model: ""         # empty = your subscription's default model
+  claude_cli_model: "sonnet"   # briefing model; "" = your subscription's default (slower)
   api_model: "claude-opus-5-5"
   # Spoken questions use a faster model, since you're waiting for the answer.
   chat_cli_model: "haiku"
@@ -53,6 +53,8 @@ briefing:
   max_headlines_for_llm: 30
   target_words: 320
   once_per_day: true         # the startup run skips if today's briefing already played
+  refresh_minutes: 60        # keep a fresh briefing ready in the background (0 = off; each refresh uses Claude)
+  fresh_minutes: 45          # "brief me" plays the prepared one if it is newer than this
 
 # Global market snapshot. Symbols are Yahoo Finance tickers.
 markets:

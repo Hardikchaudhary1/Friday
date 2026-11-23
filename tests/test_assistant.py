@@ -268,6 +268,63 @@ def test_site_search_urls():
     assert search_site("maps", "coffee near me", dry_run=True) == "https://www.google.com/maps/search/coffee%20near%20me"
 
 
+# ---- clearing in bulk ---------------------------------------------------------------
+
+def test_remove_my_schedules_asks_then_clears(friday):
+    friday.handle("add standup tomorrow at 10 am")
+    friday.handle("add dentist on 5th December at 4pm")
+    friday.handle("remind me to call the bank tomorrow at 11 am")
+    friday.handle("add task pay rent")
+    assert friday.handle("Friday, remove my schedules").text == "Delete 2 events? Say yes to confirm."
+    assert friday.handle("yes").text == "Done. Removed 2 items."
+    assert friday.schedule.events_between(date(2026, 1, 1), date(2027, 12, 31)) == []
+    # The standalone reminder and the task are untouched; event reminders went with their events.
+    assert [r.text for r in friday.schedule.pending_reminders()] == ["call the bank"]
+    assert friday.handle("delete everything").text == "Delete 1 reminder and 1 task? Say yes to confirm."
+    assert friday.handle("no").text == "Okay, I've left everything as it is."
+    assert len(friday.tasks.open_tasks()) == 1
+
+
+def test_clear_for_a_day(friday):
+    friday.handle("add standup tomorrow at 10 am")
+    friday.handle("add review on friday at 3 pm")
+    assert friday.handle("clear my calendar for tomorrow").text == "Delete 1 event for tomorrow? Say yes to confirm."
+    friday.handle("yes")
+    assert [e.title for e in friday.schedule.events_between(date(2026, 1, 1), date(2027, 12, 31))] == ["review"]
+    assert friday.handle("delete all my reminders").text == "There's nothing to remove."
+
+
+def test_wake_word_alone():
+    from friday.listen import only_wake_word
+    assert only_wake_word("Friday,") and only_wake_word("Hey Friday.") and only_wake_word(" friday ")
+    assert not only_wake_word("Friday, pause")
+
+
+# ---- streamed briefing --------------------------------------------------------------
+
+def test_streamed_briefing_hands_over_paragraphs(tmp_path, monkeypatch):
+    from friday import briefing as B
+
+    class FakeStreamer:
+        name = "fake"
+
+        def available(self):
+            return True
+
+        def stream(self, system, prompt):
+            text = "Good morning.\n\nMarkets fell. Oil rose.\n\nThat's all."
+            for i in range(0, len(text), 7):   # arrives in small pieces, like a real stream
+                yield text[i:i + 7]
+
+    monkeypatch.setattr(B, "build_backends", lambda cfg: [FakeStreamer()])
+    cfg = Config({"user_name": "T", "data_dir": str(tmp_path)})
+    data = B.BriefingData(today=NOW.date(), headlines=[], quotes=[], tasks=[])
+    parts = []
+    result = B.write_briefing_streaming(cfg, data, on_part=parts.append)
+    assert parts == ["Good morning.", "Markets fell. Oil rose.", "That's all."]
+    assert result.backend == "fake" and result.text.startswith("Good morning.")
+
+
 # ---- misc ----------------------------------------------------------------------------
 
 def test_small_talk_and_fallback(friday):

@@ -45,6 +45,11 @@ def build_hotwords(names: list[str], max_chars: int = 600) -> str:
     return ", ".join(picked)
 
 
+def only_wake_word(transcript: str) -> bool:
+    """True for "Friday." / "Hey Friday," with nothing after it."""
+    return bool(re.fullmatch(r"\W*((hey|hi|ok|okay)\W+)?fri\s?day\W*", transcript, re.I))
+
+
 def wake_word_confirmed(transcript: str) -> bool:
     """Whisper's transcript must contain the wake word near its start."""
     return bool(_WAKE_IN_TEXT.search(transcript))
@@ -208,6 +213,14 @@ class Listener(threading.Thread):
             # Woken by the voice trigger but Whisper didn't hear "Friday": a false alarm.
             self.log(f"(ignored: {text!r})")
             return
+        if include_ring and only_wake_word(text):
+            # "Friday ..." then a pause: keep listening for the actual command.
+            self.log("(listening for your command)")
+            audio = self._record([])
+            if audio is None:
+                self.log("(heard nothing)")
+                return
+            text = self._transcribe(audio)
         if text:
             self.on_command(text)
 

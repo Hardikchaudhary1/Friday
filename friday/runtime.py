@@ -34,12 +34,20 @@ class Runtime:
         self.shutdown = threading.Event()
         self.command_lock = threading.Lock()
         self.listener = None
+        self.briefing_lock = threading.Lock()
+        self.prepared = None    # (timestamp, Briefing) kept ready by the refresh loop
 
     # ---- output ------------------------------------------------------------
 
     def say(self, text: str) -> None:
         if text:
             console.print(f"[bold cyan]Friday:[/bold cyan] {text}")
+            # If something is already playing, start generating this one's audio now,
+            # so it plays the moment the current sentence ends (no gap between paragraphs).
+            if self.cfg.get("voice.engine", "edge") == "edge" and (self.speaking.is_set() or not self.say_queue.empty()):
+                from .voice import prewarm
+                threading.Thread(target=prewarm, args=([text], self.cfg.get("voice.edge_voice", "en-GB-SoniaNeural"),
+                                                       self.cfg.get("voice.rate", "+0%")), daemon=True).start()
             self.say_queue.put(text)
 
     def _speaker_loop(self):
@@ -98,16 +106,46 @@ class Runtime:
         self.listener.trigger.set()
 
     def run_briefing(self, mark: bool = True):
-        from .briefing import gather, mark_briefed, save_briefing, write_briefing
+        """Plays the prepared briefing if it's recent; otherwise writes one and starts
+        speaking as soon as its first paragraph is ready."""
+        from .briefing import gather, mark_briefed, save_briefing, write_briefing_streaming
+        log = lambda m: console.print(f"[dim]{m}[/dim]")  # noqa: E731
         try:
-            data = gather(self.cfg)
-            briefing = write_briefing(self.cfg, data, log=lambda m: console.print(f"[dim]{m}[/dim]"))
-            save_briefing(self.cfg, briefing)
-            self.say(briefing.text)
+            fresh_s = float(self.cfg.get("briefing.fresh_minutes", 45)) * 60
+            with self.briefing_lock:
+                prepared = self.prepared
+            if prepared and time.time() - prepared[0] < fresh_s:
+                log(f"Using the briefing prepared {int((time.time() - prepared[0]) / 60)} min ago.")
+                for part in [p.strip() for p in prepared[1].text.split("\n\n") if p.strip()]:
+                    self.say(part)
+            else:
+                data = gather(self.cfg)
+                briefing = write_briefing_streaming(self.cfg, data, on_part=self.say, log=log)
+                save_briefing(self.cfg, briefing)
+                with self.briefing_lock:
+                    self.prepared = (time.time(), briefing)
             if mark:
                 mark_briefed(self.cfg)
         except Exception as exc:
             self.say(f"I couldn't put the briefing together: {exc}")
+
+    def _refresh_loop(self):
+        """Keeps a recent briefing ready so "brief me" can start immediately."""
+        from .briefing import gather, save_briefing, write_briefing
+        minutes = float(self.cfg.get("briefing.refresh_minutes", 60))
+        if minutes <= 0:
+            return
+        while not self.shutdown.wait(minutes * 60):
+            if not 6 <= datetime.now().hour < 23:   # no point refreshing overnight
+                continue
+            try:
+                briefing = write_briefing(self.cfg, gather(self.cfg))
+                save_briefing(self.cfg, briefing)
+                with self.briefing_lock:
+                    self.prepared = (time.time(), briefing)
+                console.print("[dim]Briefing refreshed in the background.[/dim]")
+            except Exception as exc:
+                console.print(f"[dim]Background briefing refresh failed: {exc}[/dim]")
 
     # ---- reminders -------------------------------------------------------------
 
@@ -132,6 +170,7 @@ class Runtime:
         threading.Thread(target=self._speaker_loop, daemon=True, name="friday-speaker").start()
         threading.Thread(target=self._reminder_loop, daemon=True, name="friday-reminders").start()
         threading.Thread(target=self._prewarm_voice, daemon=True, name="friday-prewarm").start()
+        threading.Thread(target=self._refresh_loop, daemon=True, name="friday-briefing-refresh").start()
 
         if self.use_voice_input:
             self._start_voice_input()
@@ -176,7 +215,8 @@ class Runtime:
     def _prewarm_voice(self):
         if self.cfg.get("voice.engine", "edge") != "edge":
             return
-        from .voice import prewarm
+        from .voice import clean_cache, prewarm
+        clean_cache()
         time.sleep(20)  # let startup (briefing, models) go first
         prewarm(self.common_phrases(), self.cfg.get("voice.edge_voice", "en-GB-SoniaNeural"),
                 self.cfg.get("voice.rate", "+0%"))

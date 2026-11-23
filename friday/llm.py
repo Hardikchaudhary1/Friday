@@ -74,6 +74,47 @@ class ClaudeCliBackend:
         return out
 
 
+    def stream(self, system: str, prompt: str):
+        """Yields text as Claude writes it, so speech can start before the answer is finished."""
+        import json
+
+        if not self.path:
+            raise LLMError("Claude CLI not found")
+        cmd = [self.path, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+               "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", system]
+        if self.model:
+            cmd += ["--model", self.model]
+        with tempfile.TemporaryDirectory(prefix="friday-") as cwd:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, encoding="utf-8", cwd=cwd,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+            got_text = False
+            error = ""
+            try:
+                for line in proc.stdout:
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    if msg.get("type") == "stream_event":
+                        delta = msg["event"].get("delta", {})
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            got_text = True
+                            yield delta["text"]
+                    elif msg.get("type") == "result" and msg.get("is_error"):
+                        error = str(msg.get("result", ""))[:300]
+            finally:
+                try:
+                    proc.wait(timeout=self.timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            if not got_text:
+                err = error or (proc.stderr.read() if proc.stderr else "")[:300]
+                raise LLMError(f"Claude CLI failed (exit {proc.returncode}): {err.strip()}")
+
+
 class AnthropicApiBackend:
     name = "anthropic_api"
 
@@ -114,6 +155,9 @@ class AnthropicApiBackend:
             raise LLMError("Anthropic API returned no text")
         return text
 
+    def stream(self, system: str, prompt: str):
+        yield self.complete(system, prompt)
+
 
 def build_backends(cfg, purpose: str = "briefing") -> list:
     """purpose="chat" is for spoken questions: a faster model, because you're waiting for the answer."""
@@ -123,7 +167,8 @@ def build_backends(cfg, purpose: str = "briefing") -> list:
         api_model = cfg.get("llm.chat_api_model", "claude-haiku-5-5")
         timeout = min(timeout, 45)
     else:
-        cli_model = cfg.get("llm.claude_cli_model", "")
+        # Sonnet writes the briefing about twice as fast as the default model, at similar quality.
+        cli_model = cfg.get("llm.claude_cli_model", "sonnet")
         api_model = cfg.get("llm.api_model", "claude-opus-5-5")
     backends = []
     for name in cfg.get("llm.order", ["claude_cli", "anthropic_api", "template"]):

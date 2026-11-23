@@ -31,6 +31,17 @@ def press(key: str, dry_run: bool = False) -> None:
     user32.keybd_event(vk, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
 
 
+def press_previous_track(dry_run: bool = False) -> None:
+    """Goes to the previous track. Two quick presses: the first restarts the current song
+    (what players do mid-track), the second moves back one."""
+    if dry_run:
+        return
+    import time
+    press("previous")
+    time.sleep(0.25)
+    press("previous")
+
+
 # ---- volume ----------------------------------------------------------------------
 
 def _endpoint():

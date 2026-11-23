@@ -216,7 +216,11 @@ def test_search(friday):
     ("pause", "play_pause"), ("pause the music", "play_pause"), ("resume", "play_pause"),
     ("play", "play_pause"), ("stop the music", "play_pause"), ("play some music", "play_pause"),
     ("next song", "next"), ("skip", "next"), ("skip this one", "next"),
-    ("previous track", "previous"), ("go back", "previous"),
+    ("previous track", "previous"), ("go back", "previous"), ("previous song", "previous"),
+    ("play the previous song", "previous"), ("go back to the last song", "previous"), ("last song", "previous"),
+    ("previous", "previous"), ("go back one song", "previous"), ("previous one", "previous"),
+    ("replay this song", "restart"), ("restart the song", "restart"), ("play this song again", "restart"),
+    ("start over", "restart"),
 ])
 def test_media_keys(friday, said, key):
     r = friday.handle(f"Friday, {said}")

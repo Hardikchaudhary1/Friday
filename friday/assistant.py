@@ -74,7 +74,11 @@ _MEDIA_OBJ = r"( the| this| that| my)?( music| song| track| video| it| playback|
 R_PAUSE = _rx(rf"^(pause|resume|unpause|continue|play){_MEDIA_OBJ}( please)?$|^play (some )?music$|"
               r"^stop( the| this| my)? (music|song|track|video|playback|spotify|youtube|audio)$")
 R_NEXT = _rx(rf"^(next|skip|skip ahead|play the next){_MEDIA_OBJ}( please)?$|^(next one|skip this( one)?)$")
-R_PREV = _rx(rf"^(previous|go back|back|last|play the previous|replay){_MEDIA_OBJ}( please)?$|^(previous one)$")
+R_PREV = _rx(r"^((play|go to|go back to|skip back to|back to)\s+)?(the\s+)?(previous|last|prior|earlier)"
+             r"(\s+(one|song|track|video))?( please)?$|^(go back|back|skip back|go back one|back one)"
+             r"(\s+(a|one)\s+(song|track))?( please)?$|^previous$")
+R_REPLAY = _rx(r"^(replay|restart|start over|play again)(\s+(this|the|that))?(\s+(song|track|video|one))?( again)?"
+               r"( from the (start|beginning))?$|^(play (this|the|that) (song|track|video) again)$")
 R_VOL_SET = _rx(r"^(set |turn |change )?(the )?volume (to |at )?(\d{1,3})( percent| %|%)?$")
 R_VOL_STEP = _rx(r"^(turn (it|the volume|the music) (up|down)|volume (up|down)|(louder|quieter|softer)( please)?|"
                  r"(increase|decrease|raise|lower|reduce) (the )?volume)( a (lot|little|bit))?$")
@@ -144,6 +148,7 @@ class Assistant:
             (R_SPOTIFY_PLAY, lambda m: self._spotify_play()),
             (R_PAUSE, lambda m: self._media("play_pause")),
             (R_NEXT, lambda m: self._media("next")),
+            (R_REPLAY, lambda m: self._media("previous", restart=True)),
             (R_PREV, lambda m: self._media("previous")),
             (R_VOL_SET, lambda m: self._volume_set(int(m.group(4)))),
             (R_VOL_STEP, self._volume_step),
@@ -224,11 +229,16 @@ class Assistant:
 
     # ---- media and windows ---------------------------------------------------
 
-    def _media(self, key: str) -> Reply:
+    def _media(self, key: str, restart: bool = False) -> Reply:
         from . import media
+        if key == "previous" and not restart:
+            # Players (Spotify, YouTube) treat the first "previous" press as "restart this song"
+            # once a track is a few seconds in; a second quick press goes to the previous track.
+            media.press_previous_track(self.dry_run)
+            return Reply("", data={"media": "previous"})
         media.press(key, self.dry_run)
         # Quiet confirmation: an empty reply means Friday doesn't talk over your music.
-        return Reply("", data={"media": key})
+        return Reply("", data={"media": "restart" if restart else key})
 
     def _volume_set(self, percent: int) -> Reply:
         from . import media

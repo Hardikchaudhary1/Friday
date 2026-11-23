@@ -23,6 +23,9 @@ def normalise_speech(raw: str) -> str:
     ("open, Spotify"), and writes "5 p.m." as "5 pm"."""
     text = (raw or "").replace("﻿", "")
     text = re.sub(r"\b([ap])\.\s?m\b\.?", r"\1m", text, flags=re.I)
+    # Common mishearings of "Spotify".
+    text = re.sub(r"\b(sporty\s?(bar|fy|fi|five|phi)|spot\s?(a|the)?\s?fly|spotty\s?(fy|fi|five)|spot\s?fi|"
+                  r"spotify'?s)\b", "Spotify", text, flags=re.I)
     text = WAKE_PREFIX.sub("", text)
     text = re.sub(r"\s*[,;:]\s*", " ", text)
     return re.sub(r"\s{2,}", " ", text).strip(" .!?")
@@ -67,7 +70,14 @@ R_CLEAR = _rx(r"^(remove|delete|clear|cancel|wipe|erase)( out)?( all)?( of)?( my
               r"( for (today|tomorrow))?$")
 R_YES = _rx(r"^(yes|yeah|yep|sure|confirm|do it|go ahead|ok|okay)\b")
 R_CANCEL_REMINDER = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(last\s+)?reminder(\s+(to|about|for)\s+(.+))?$")
-R_CANCEL_EVENT = _rx(r"^(cancel|delete|remove)\s+(the\s+|my\s+)?(event|meeting|appointment)\s+(.+)$")
+R_CANCEL_EVENT = _rx(r"^(cancel|delete|remove|drop)\s+(the\s+|my\s+)?(event|meeting|appointment|task|to-?do)?\s*"
+                     r"(called|named|about|for)?\s*(.+?)(\s+(event|meeting|task|from my (calendar|list|tasks|schedule)))?$")
+R_MOVE = _rx(r"^(move|reschedule|change|push|shift|postpone|bring forward)\s+(the time of\s+|the date of\s+)?"
+             r"(the\s+|my\s+)?(event|meeting|appointment|task|to-?do|reminder)?\s*(about|for|called|named|to)?\s*"
+             r"(.+?)\s+(to|for|until|till)\s+(.+)$")
+_DATE_WORDS = _rx(r"\b(today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next|"
+                  r"\d{1,2}(st|nd|rd|th)|january|february|march|april|may|june|july|august|september|october|"
+                  r"november|december|in \d+ (days?|weeks?))\b")
 # ---- media, volume, sites, windows ----
 _MEDIA_OBJ = r"( the| this| that| my)?( music| song| track| video| it| playback| spotify| youtube| audio)?"
 # A bare "stop" stops Friday talking; "stop the music" pauses media.
@@ -84,7 +94,11 @@ R_VOL_STEP = _rx(r"^(turn (it|the volume|the music) (up|down)|volume (up|down)|(
                  r"(increase|decrease|raise|lower|reduce) (the )?volume)( a (lot|little|bit))?$")
 R_MUTE = _rx(r"^(mute|unmute)( the)?( sound| audio| volume| music| it)?$")
 R_WHAT_VOL = _rx(r"^what('s| is) the volume$")
-R_PLAY_ON = _rx(r"^play (.+?) on (youtube|spotify)$")
+R_PLAY_ON = _rx(r"^play (.+?) (on|from|in|using|with) (youtube|spotify)$")
+R_PLAY_THAT = _rx(r"^play (that|this|the) (song|track|one|first one|first song|top result)$|^play it$")
+# "next track" is sometimes heard as "next check": a short next/previous phrase is still the media key.
+R_NEXT_LOOSE = _rx(r"^(next|skip)\s+\w+$")
+R_PREV_LOOSE = _rx(r"^(previous)\s+\w+$")
 R_SPOTIFY_PLAY = _rx(r"^(play|start|resume|put on) (spotify|music on spotify|something on spotify)$")
 GENERIC_MUSIC = _rx(r"^(something|anything|music|some music|my music|songs|some songs|a song|my songs|"
                     r"my playlist|a playlist|my liked songs|liked songs)$")
@@ -126,6 +140,7 @@ class Assistant:
         self.llm_backends = llm_backends
         self.pending: dict | None = None   # a follow-up question waiting for an answer
         self.on_thinking = None            # called before a slow Claude answer
+        self.last_search: tuple[str, str] | None = None   # for "play that song"
         self.window_lister = None          # tests replace the live window list
         self.morning_hour = int(cfg.get("reminders.morning_hour", 9))
         self.before_minutes = int(cfg.get("reminders.before_minutes", 30))
@@ -145,6 +160,7 @@ class Assistant:
 
         for pattern, handler in (
             # Media first: these are short and said mid-task, so they must be quick and silent.
+            (R_PLAY_THAT, lambda m: self._play_that()),   # before play/pause: "play that song" after a search
             (R_SPOTIFY_PLAY, lambda m: self._spotify_play()),
             (R_PAUSE, lambda m: self._media("play_pause")),
             (R_NEXT, lambda m: self._media("next")),
@@ -160,6 +176,7 @@ class Assistant:
             (R_HELP, lambda m: Reply(HELP)),
             (R_LOGIN, lambda m: self._login()),
             (R_CLEAR, self._clear),
+            (R_MOVE, self._move),
             (R_CANCEL_REMINDER, self._cancel_reminder),
             (R_CANCEL_EVENT, self._cancel_event),
             (R_REMIND, self._remind),
@@ -173,11 +190,13 @@ class Assistant:
             (R_CLOSE, lambda m: self._close(m.group(2))),
             (R_FOCUS, lambda m: self._focus(m.group(3))),
             (R_OPEN, lambda m: self._open(m.group(3))),
-            (R_PLAY_ON, lambda m: self._play(m.group(1), m.group(2).lower())),
+            (R_PLAY_ON, lambda m: self._play(m.group(1), m.group(3).lower())),
             (R_PLAY_ANY, lambda m: self._play(m.group(1), None)),
             (R_SEARCH_ON, lambda m: self._search_site(m.group(4), m.group(3))),
             (R_SEARCH_SITE_FIRST, lambda m: self._search_site(m.group(1), m.group(2))),
             (R_SEARCH, lambda m: Reply(web_search(m.group(5), self.dry_run).message)),
+            (R_NEXT_LOOSE, lambda m: self._media("next")),
+            (R_PREV_LOOSE, lambda m: self._media("previous")),
             (R_TIME, lambda m: Reply(f"It's {self._clock(self.now())}.")),
             (R_DATE, lambda m: Reply(f"It's {self.now():%A} {self.now().day} {self.now():%B} {self.now().year}.")),
             (R_BRIEF, lambda m: Reply("Here's your briefing.", "briefing")),
@@ -275,8 +294,7 @@ class Assistant:
         if where == "spotify" and GENERIC_MUSIC.match(what):
             return self._spotify_play()
         if where == "spotify":
-            media.search_site("spotify", what, self.dry_run)
-            return Reply(f"Searching Spotify for {what}.")
+            return self._spotify_song(what)
         found, _ = media.play_on_youtube(what, self.dry_run) if not self.dry_run else (True, "")
         return Reply(f"Playing {what} on YouTube." if found else f"Here are the YouTube results for {what}.")
 
@@ -297,8 +315,40 @@ class Assistant:
             threading.Timer(6.0, media.press, args=("play_pause",)).start()
         return Reply("Opening Spotify and starting your music.")
 
+    def _spotify_song(self, what: str) -> Reply:
+        """Plays a specific song: Spotify's search, then its Play button (see spotify.py)."""
+        self.last_search = ("spotify", what)
+        if self.dry_run:
+            return Reply(f"Playing {what} on Spotify.")
+        from . import spotify
+        if not spotify.spotify_window():
+            opened = open_target("spotify", self.apps)
+            if not opened.ok:
+                return Reply("Spotify doesn't seem to be installed.")
+            import time as _t
+            for _ in range(40):                    # wait up to ~10 s for Spotify to start
+                _t.sleep(0.25)
+                if spotify.spotify_window():
+                    break
+            _t.sleep(2)
+        ok, title = spotify.play_song(what)
+        if ok:
+            return Reply("", data={"media": f"playing {title}"})
+        from . import media
+        media.search_site("spotify", what)
+        return Reply(f"I couldn't start {what} automatically, so I've opened the search in Spotify.")
+
+    def _play_that(self) -> Reply:
+        if not getattr(self, "last_search", None):
+            return self._media("play_pause")
+        site, query = self.last_search
+        if site == "spotify":
+            return self._spotify_song(query)
+        return self._play(query, "youtube")
+
     def _search_site(self, site: str, query: str) -> Reply:
         from . import media
+        self.last_search = (site.lower(), query)
         media.search_site(site.lower(), query, self.dry_run)
         return Reply(f"Searching {site.title() if site.lower() != 'x' else 'X'} for {query}.")
 
@@ -461,6 +511,18 @@ class Assistant:
         parts = [f"{n} {label}{'s' if n != 1 else ''}" for n, label in
                  ((len(events), "event"), (len(reminders), "reminder"), (len(tasks), "task")) if n]
         if not parts:
+            # Point at what *is* there: people often call tasks "events".
+            _, other_rem, other_tasks = self._clear_targets("everything", None)
+            hints = []
+            if what != "tasks" and other_tasks:
+                hints.append(f"{len(other_tasks)} task{'s' if len(other_tasks) != 1 else ''} on your to-do list "
+                             f"(say delete all my tasks)")
+            if what != "reminders" and other_rem:
+                hints.append(f"{len(other_rem)} reminder{'s' if len(other_rem) != 1 else ''} "
+                             f"(say delete all my reminders)")
+            label = {"events": "events", "reminders": "reminders", "tasks": "tasks"}.get(what, "items")
+            if hints:
+                return Reply(f"You have no {label}{' for ' + day if day else ''}. You do have " + " and ".join(hints) + ".")
             return Reply("There's nothing to remove.")
         listing = " and ".join(parts) if len(parts) <= 2 else ", ".join(parts[:-1]) + " and " + parts[-1]
         return self._ask("clear_confirm", f"Delete {listing}{' for ' + day if day else ''}? Say yes to confirm.",
@@ -477,15 +539,98 @@ class Assistant:
         return Reply(f"Done. Removed {len(events) + len(reminders) + len(tasks)} item"
                      f"{'s' if len(events) + len(reminders) + len(tasks) != 1 else ''}.")
 
-    def _cancel_event(self, m: re.Match) -> Reply:
+    # ---- finding, deleting and moving one item by name ---------------------------
+
+    def _find_item(self, name: str, kind_hint: str | None = None):
+        """Best match for a spoken name across events, standalone reminders and tasks.
+        Returns (kind, item, score) or None. A kind hint ("event", "task") is preferred, not required:
+        you may call a task an event."""
         today = self.now().date()
-        events = self.schedule.events_between(today, today + timedelta(days=366))
-        eid, score = _best_match(m.group(4), [(e.id, e.title) for e in events])
-        if not events or score < 0.5:
-            return Reply(f"I couldn't find an event called {m.group(4)}.")
-        event = next(e for e in events if e.id == eid)
-        self.schedule.delete_event(event.id)
-        return Reply(f"Cancelled {event.spoken(today)}.")
+        name = re.sub(r"\s+(event|task|reminder|meeting|appointment)$", "", name.strip(), flags=re.I)
+        candidates = []
+        for e in self.schedule.events_between(today - timedelta(days=1), today + timedelta(days=366)):
+            candidates.append(("event", e, e.title))
+        for r in self.schedule.pending_reminders():
+            if r.event_id is None:
+                candidates.append(("reminder", r, r.text))
+        for t in self.tasks.open_tasks():
+            candidates.append(("task", t, t.text))
+        best = None
+        for kind, item, title in candidates:
+            q, t = name.lower(), title.lower()
+            words_q, words_t = set(q.split()), set(t.split())
+            score = 1.0 if q == t else 0.9 if q in t else max(
+                SequenceMatcher(None, q, t).ratio(),
+                len(words_q & words_t) / max(1, len(words_q)) * 0.85)
+            if kind_hint and kind == kind_hint:
+                score += 0.05
+            if best is None or score > best[2]:
+                best = (kind, item, score)
+        return best if best and best[2] >= 0.5 else None
+
+    @staticmethod
+    def _kind_from_word(word: str | None) -> str | None:
+        if not word:
+            return None
+        word = word.lower()
+        if word in ("event", "meeting", "appointment"):
+            return "event"
+        if word.startswith(("task", "to")):
+            return "task"
+        return "reminder" if word == "reminder" else None
+
+    def _cancel_event(self, m: re.Match) -> Reply | None:
+        name = m.group(5)
+        if re.fullmatch(r"(it|that|this|all|everything)", name.strip(), re.I):
+            return None
+        found = self._find_item(name, self._kind_from_word(m.group(3)))
+        if not found:
+            return Reply(f"I couldn't find an event, reminder or task called {name}.")
+        kind, item, _ = found
+        today = self.now().date()
+        if kind == "event":
+            self.schedule.delete_event(item.id)
+            return Reply(f"Cancelled {item.spoken(today)}.")
+        if kind == "reminder":
+            self.schedule.cancel_reminder(item.id)
+            return Reply(f"Cancelled the reminder: {item.text}.")
+        self.tasks.remove(item.id)
+        return Reply(f"Removed the task: {item.text}.")
+
+    def _move(self, m: re.Match) -> Reply | None:
+        name, when_text = m.group(6), m.group(8)
+        if re.match(r"^(the\s+)?volume\b", name, re.I):
+            return None
+        found = self._find_item(name, self._kind_from_word(m.group(4)))
+        if not found:
+            return Reply(f"I couldn't find an event, reminder or task called {name}.")
+        kind, item, _ = found
+        now = self.now()
+        p = parse(when_text, now, self.morning_hour)
+        if p.when is None:
+            return Reply(f"Sorry, I didn't catch the new time for {name}.")
+        said_date = bool(_DATE_WORDS.search(when_text))
+        if kind == "task":
+            self.tasks.set_due(item.id, p.when.date())
+            return Reply(f"Moved the task {item.text} to {p.when:%A} {p.when.day} {p.when:%B}.")
+        if kind == "event":
+            day = p.when.date() if said_date or not p.has_time else item.day
+            at = p.when.time() if p.has_time else item.at
+            event, reminders = self.schedule.reschedule_event(item.id, day, at, morning_hour=self.morning_hour,
+                                                              before_minutes=self.before_minutes, now=now)
+            when = event.spoken(now.date()).removeprefix(event.title).strip().removeprefix("on ")
+            return Reply(f"Moved {event.title} to {when}.")
+        due = p.when
+        if p.has_time and not said_date:
+            due = datetime.combine(item.due_at.date(), p.when.time())
+            if due <= now:
+                due = p.when
+        if not p.has_time:
+            due = datetime.combine(p.when.date(), item.due_at.time())
+        if due <= now:
+            return Reply(f"{spoken_datetime(due, now)} has already passed.")
+        self.schedule.reschedule_reminder(item.id, due)
+        return Reply(f"Okay, I'll remind you to {item.text} {spoken_datetime(due, now)} instead.")
 
     def _schedule(self, text: str) -> Reply:
         today = self.now().date()
@@ -552,11 +697,13 @@ class Assistant:
             "unsure or the question needs live data you don't have, say so briefly.\n"
             "Friday handles actions itself through fixed phrases; you only get requests those phrases did not match. "
             "If the user seems to want one of these actions, tell them the exact phrase to say instead of saying it "
-            "can't be done: 'open Spotify', 'close Spotify', 'switch to Brave', 'pause', 'next song', "
-            "'set volume to 40', 'play lofi on YouTube', 'search X on Amazon', 'remind me to X tomorrow at 5 pm', "
+            "can't be done: 'open Spotify', 'close Spotify', 'switch to Brave', 'pause', 'resume', 'next song', "
+            "'previous song', 'replay this song', 'set volume to 40', 'mute', 'play Believer on Spotify', "
+            "'play lofi on YouTube', 'search X on Amazon', 'remind me to X tomorrow at 5 pm', "
             "'what are my reminders', 'cancel the reminder about X', 'add dentist on 5 December at 4 pm', "
-            "'what's on my schedule tomorrow', 'cancel the event X', 'delete all my events', 'delete all my "
-            "reminders', 'add task X', 'what are my tasks', 'mark X as done', 'brief me'.\n"
+            "'what's on my schedule tomorrow', 'move the dentist to Friday at 3 pm', 'delete X' (any event, "
+            "reminder or task by name), 'delete all my events', 'delete all my reminders', 'delete all my tasks', "
+            "'add task X', 'what are my tasks', 'mark X as done', 'move the task X to Friday', 'brief me'.\n"
             f"Current local time: {now:%A %d %B %Y %H:%M}."
         )
         announced = False

@@ -35,6 +35,7 @@ class Runtime:
         self.command_lock = threading.Lock()
         self.listener = None
         self.briefing_lock = threading.Lock()
+        self.speech_epoch = 0   # bumped by interrupt(); output from an older epoch is dropped
         self.prepared = None    # (timestamp, Briefing) kept ready by the refresh loop
 
     # ---- output ------------------------------------------------------------
@@ -68,7 +69,8 @@ class Runtime:
                 self.say_queue.task_done()
 
     def interrupt(self):
-        """Stops current speech and anything queued."""
+        """Stops current speech, anything queued, and the rest of a briefing still being written."""
+        self.speech_epoch += 1
         self.stop_speech.set()
         while not self.say_queue.empty():
             try:
@@ -90,6 +92,7 @@ class Runtime:
             self.interrupt()
         elif reply.action == "briefing":
             self.say(reply.text)
+            # Started after the reply so its epoch is current.
             threading.Thread(target=self.run_briefing, daemon=True).start()
         else:
             if not reply.text and reply.data.get("media"):
@@ -110,6 +113,12 @@ class Runtime:
         speaking as soon as its first paragraph is ready."""
         from .briefing import gather, mark_briefed, save_briefing, write_briefing_streaming
         log = lambda m: console.print(f"[dim]{m}[/dim]")  # noqa: E731
+        epoch = self.speech_epoch
+
+        def say_part(part: str):
+            if self.speech_epoch == epoch:   # dropped once you've said "stop"
+                self.say(part)
+
         try:
             fresh_s = float(self.cfg.get("briefing.fresh_minutes", 45)) * 60
             with self.briefing_lock:
@@ -117,10 +126,12 @@ class Runtime:
             if prepared and time.time() - prepared[0] < fresh_s:
                 log(f"Using the briefing prepared {int((time.time() - prepared[0]) / 60)} min ago.")
                 for part in [p.strip() for p in prepared[1].text.split("\n\n") if p.strip()]:
-                    self.say(part)
+                    say_part(part)
             else:
                 data = gather(self.cfg)
-                briefing = write_briefing_streaming(self.cfg, data, on_part=self.say, log=log)
+                if self.speech_epoch != epoch:
+                    return
+                briefing = write_briefing_streaming(self.cfg, data, on_part=say_part, log=log)
                 save_briefing(self.cfg, briefing)
                 with self.briefing_lock:
                     self.prepared = (time.time(), briefing)
@@ -255,7 +266,8 @@ class Runtime:
 
         self.listener = Listener(self.cfg, on_command=lambda t: self.handle(t), is_speaking=self.speaking.is_set,
                                  on_wake=on_wake, log=lambda m: console.print(f"[dim]{m}[/dim]"),
-                                 vocabulary=vocabulary, on_heard=ducker.restore)
+                                 vocabulary=vocabulary, on_heard=ducker.restore,
+                                 on_stop_word=self.interrupt)
         self.listener.start()
 
         def hotkey_pressed():

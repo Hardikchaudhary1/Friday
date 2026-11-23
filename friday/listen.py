@@ -46,6 +46,32 @@ def build_hotwords(names: list[str], max_chars: int = 600) -> str:
     return ", ".join(picked)
 
 
+STOP_WORDS = ["stop", "friday stop", "stop friday", "stop it", "stop talking"]
+# Sound-alikes that come up in Friday's own speech (briefings say "stocks" a lot), so its voice
+# coming back through the microphone isn't mistaken for "stop".
+STOP_DECOYS = ["stock", "stocks", "top", "shop", "step", "start", "stuff", "store", "story", "dollar", "quite",
+               "quarter", "enough", "market", "stopped", "stops", "the", "a", "and", "is", "to", "of", "in",
+               "it", "that", "for", "on", "with", "up", "down", "percent", "point", "oil", "rate", "quiet"]
+
+
+_STOP_CANDIDATES = {"stop", "stops", "stopped", "top", "step", "stock", "shop"}
+
+
+def heard_stop_word(heard: str) -> bool:
+    """A possible "stop" (or a sound-alike) in what the stop-listener heard. Deliberately loose:
+    Whisper double-checks every candidate before Friday actually stops."""
+    return bool(_STOP_CANDIDATES & set(heard.split()))
+
+
+def whisper_confirms_stop(whisper, audio: np.ndarray) -> tuple[bool, str]:
+    """Second opinion on a possible "stop": Whisper is far better than Vosk at telling your
+    "stop" apart from Friday's own "stocks" or "Friday's sell-off" coming through the speakers."""
+    segments, _ = whisper.transcribe(audio, language="en", beam_size=1, condition_on_previous_text=False,
+                                     initial_prompt="Stop. Friday, stop.")
+    text = " ".join(s.text.strip() for s in segments)
+    return bool(re.search(r"\bstop\b(?![-'])", text, re.I)), text
+
+
 def only_wake_word(transcript: str) -> bool:
     """True for "Friday." / "Hey Friday," with nothing after it."""
     return bool(re.fullmatch(r"\W*((hey|hi|ok|okay)\W+)?fri\s?day\W*", transcript, re.I))
@@ -114,10 +140,12 @@ class Hotkey(threading.Thread):
 class Listener(threading.Thread):
     """Waits for "Friday" (or the hotkey), records what follows, and hands the text to on_command."""
 
-    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print, vocabulary=None, on_heard=None):
+    def __init__(self, cfg, on_command, is_speaking, on_wake=None, log=print, vocabulary=None, on_heard=None,
+                 on_stop_word=None):
         super().__init__(daemon=True, name="friday-listener")
         self.cfg, self.on_command, self.is_speaking, self.on_wake, self.log = cfg, on_command, is_speaking, on_wake, log
         self.on_heard = on_heard   # called once recording ends (e.g. to bring the music volume back)
+        self.on_stop_word = on_stop_word   # called when you say "stop" while Friday is talking
         # Names Whisper should expect (installed apps, websites), so "open Spotify" isn't heard as "open 45".
         self.hotwords = build_hotwords(vocabulary() if vocabulary else [])
         self.audio: queue.Queue[bytes] = queue.Queue()
@@ -154,6 +182,9 @@ class Listener(threading.Thread):
         wake_words = self.cfg.get("listen.wake_words", ["friday", "hey friday"])
         model = Model(str(vosk_model_path(self.cfg)))
         rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(wake_words + DECOY_WORDS + ["[unk]"]))
+        # While Friday talks, a second recognizer listens only for "stop" (barge-in).
+        stop_rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(STOP_WORDS + STOP_DECOYS + ["[unk]"]))
+        stop_hits = 0
         self._load_whisper()
         self.log("Listening for \"Friday\" (or press Ctrl+Alt+F).")
 
@@ -175,7 +206,18 @@ class Listener(threading.Thread):
                 if self.is_speaking():
                     self.ring.clear()
                     rec.Reset()
+                    if self.on_stop_word:
+                        heard = (json.loads(stop_rec.Result()).get("text", "") if stop_rec.AcceptWaveform(block)
+                                 else json.loads(stop_rec.PartialResult()).get("partial", ""))
+                        stop_hits = stop_hits + 1 if heard_stop_word(heard) else 0
+                        if stop_hits >= 1:
+                            stop_hits = 0
+                            stop_rec.Reset()
+                            self.log("(stop)")
+                            self.on_stop_word()
                     continue
+                stop_rec.Reset()
+                stop_hits = 0
                 self.ring.append(block)
                 level = self._rms(block)
                 self.noise_floor = 0.98 * self.noise_floor + 0.02 * min(level, 2000)

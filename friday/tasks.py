@@ -81,6 +81,11 @@ class TaskStore:
             )
             return cur.rowcount > 0
 
+    def set_due(self, task_id: int, due: date | None) -> bool:
+        with self._conn() as c:
+            return c.execute("UPDATE tasks SET due = ? WHERE id = ?",
+                             (due.isoformat() if due else None, task_id)).rowcount > 0
+
     def remove(self, task_id: int) -> bool:
         with self._conn() as c:
             return c.execute("DELETE FROM tasks WHERE id = ?", (task_id,)).rowcount > 0

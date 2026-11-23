@@ -241,7 +241,7 @@ def test_volume_commands(friday, said, reply):
 
 
 @pytest.mark.parametrize("said, reply", [
-    ("play lofi beats on spotify", "Searching Spotify for lofi beats."),
+    ("play lofi beats on spotify", "Playing lofi beats on Spotify."),
     ("play the song blinding lights on youtube", "Playing blinding lights on YouTube."),
     ("play interstellar soundtrack", "Playing interstellar soundtrack on YouTube."),
     ("search for mechanical keyboards on amazon", "Searching Amazon for mechanical keyboards."),
@@ -279,12 +279,69 @@ def test_generic_spotify_requests_play_instead_of_searching(friday):
         assert r.data == {"media": "play_pause"}, said
     friday.window_lister = lambda: []
     assert friday.handle("play music on spotify").text == "Opening Spotify and starting your music."
-    assert friday.handle("play blinding lights on spotify").text == "Searching Spotify for blinding lights."
+    assert friday.handle("play blinding lights on spotify").text == "Playing blinding lights on Spotify."
 
 
 @pytest.mark.parametrize("heard, key", [("Friday, late.", "play_pause"), ("Friday, paws.", "play_pause"),
                                          ("Friday, necks.", "next")])
 def test_common_mishearings(friday, heard, key):
+    assert friday.handle(heard).data == {"media": key}
+
+
+# ---- from the second real-use log ----------------------------------------------------
+
+def test_delete_by_name_finds_tasks_called_events(friday):
+    friday.handle("add task review Friday project README due today")
+    assert friday.handle("delete my events").text == (
+        "You have no events. You do have 1 task on your to-do list (say delete all my tasks).")
+    assert friday.handle("Friday, delete, readme project event.").text == \
+        "Removed the task: review Friday project README."
+
+
+def test_delete_by_name_events_and_reminders(friday):
+    friday.handle("add dentist appointment on 5th December at 4pm")
+    friday.handle("remind me to call the bank tomorrow at 11 am")
+    assert friday.handle("cancel the dentist").text.startswith("Cancelled dentist appointment on Saturday")
+    assert friday.handle("remove call the bank").text == "Cancelled the reminder: call the bank."
+    assert friday.handle("delete the gym session").text == "I couldn't find an event, reminder or task called gym session."
+
+
+def test_move_event_time_only_keeps_the_date(friday):
+    friday.handle("add team standup tomorrow at 10 am")
+    assert friday.handle("move the standup to 11 am").text == "Moved team standup to tomorrow at 11 AM."
+    reminders = friday.schedule.pending_reminders()
+    assert [r.due_at for r in reminders] == [datetime(2026, 11, 24, 9, 0), datetime(2026, 11, 24, 10, 30)]
+
+
+def test_move_event_to_another_day(friday):
+    friday.handle("add dentist appointment on 5th December at 4pm")
+    r = friday.handle("reschedule the dentist appointment to friday at 3 pm")
+    assert r.text == "Moved dentist appointment to Friday 27 November at 3 PM."
+    e = friday.schedule.events_between(date(2026, 11, 27), date(2026, 11, 27))[0]
+    assert (e.day, e.at) == (date(2026, 11, 27), time(15, 0))
+    # Date only: keeps the 3 PM time.
+    friday.handle("move the dentist to 2nd December")
+    e = friday.schedule.events_between(date(2026, 12, 2), date(2026, 12, 2))[0]
+    assert e.at == time(15, 0)
+
+
+def test_change_reminder_and_task_due(friday):
+    friday.handle("remind me to call the bank tomorrow at 11 am")
+    assert friday.handle("change the reminder about the bank to tomorrow at noon").text == \
+        "Okay, I'll remind you to call the bank tomorrow at 12 PM instead."
+    friday.handle("add task pay rent")
+    assert friday.handle("move the task pay rent to friday").text == "Moved the task pay rent to Friday 27 November."
+
+
+def test_spotify_mishearing_and_from(friday):
+    assert friday.handle("Friday, play one name on sporty bar.").text == "Playing one name on Spotify."
+    assert friday.handle("play believer from spotify").text == "Playing believer on Spotify."
+    assert friday.handle("play that song").text == "Playing believer on Spotify."
+
+
+@pytest.mark.parametrize("heard, key", [("Friday, next, check.", "next"), ("Friday, previous, resume,", "previous"),
+                                         ("skip track", "next")])
+def test_loose_next_previous(friday, heard, key):
     assert friday.handle(heard).data == {"media": key}
 
 

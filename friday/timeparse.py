@@ -46,6 +46,9 @@ def parse(sentence: str, now: datetime | None = None, default_hour: int = 9) -> 
 
     now = now or datetime.now()
     settings = {"PREFER_DATES_FROM": "future", "RELATIVE_BASE": now, "RETURN_AS_TIMEZONE_AWARE": False}
+    # A phrase that is only a time ("11 am", "3:30", "noon") reads like "at 11 am".
+    if re.fullmatch(r"\s*(\d{1,2}(:\d{2})?\s*(am|pm)?|noon|midnight)\s*", sentence, re.I):
+        sentence = "at " + sentence.strip()
 
     # A bare hour ("at 7") confuses dateparser (it may read 7 as July), so take it out first.
     bare_hour = None

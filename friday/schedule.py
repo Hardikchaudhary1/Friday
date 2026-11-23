@@ -156,6 +156,20 @@ class ScheduleStore:
             ).fetchall()
         return [Event(r[0], r[1], date.fromisoformat(r[2]), time.fromisoformat(r[3]) if r[3] else None) for r in rows]
 
+    def reschedule_reminder(self, reminder_id: int, due_at: datetime) -> bool:
+        with self._conn() as c:
+            return c.execute("UPDATE reminders SET due_at = ?, fired = 0 WHERE id = ?",
+                             (due_at.isoformat(timespec="minutes"), reminder_id)).rowcount > 0
+
+    def reschedule_event(self, event_id: int, day: date, at: time | None, **kw) -> tuple[Event, list[Reminder]] | None:
+        """Moves an event: its old reminders are dropped and new ones scheduled for the new time."""
+        with self._conn() as c:
+            row = c.execute("SELECT title FROM events WHERE id = ?", (event_id,)).fetchone()
+        if not row:
+            return None
+        self.delete_event(event_id)
+        return self.add_event(row[0], day, at, **kw)
+
     def delete_event(self, event_id: int) -> bool:
         with self._conn() as c:
             return c.execute("DELETE FROM events WHERE id = ?", (event_id,)).rowcount > 0

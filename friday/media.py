@@ -37,8 +37,17 @@ def press_previous_track(dry_run: bool = False) -> None:
     if dry_run:
         return
     import time
+    from .spotify import now_playing
+    before = now_playing()
     press("previous")
-    time.sleep(0.25)
+    if before is not None:
+        # Spotify shows the song in its window title: if one press already changed the song
+        # (it had only just started), stop there instead of going back two songs.
+        time.sleep(0.7)
+        if now_playing() != before:
+            return
+    else:
+        time.sleep(0.25)
     press("previous")
 
 
